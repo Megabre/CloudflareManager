@@ -8,3 +8,10 @@ Adresine yükleyin, Whmcs kontrol panelinde ilave modüller kısmından aktif ed
 Cloudflare'da DNS Zone api token oluşturup modülün kurulum alanında api key isteyen yere girin (Mail adresini boş bırakın)
 
 Ardından modülü kullanmaya başlayabilirsiniz.
+
+
+![Cloudflare Manager](https://raw.githubusercontent.com/Megabre/CloudflareManager/refs/heads/main/cfmanage.png)
+![Cloudflare Manager](https://raw.githubusercontent.com/Megabre/CloudflareManager/refs/heads/main/cfmanager2.png)
+![Cloudflare Manager](https://raw.githubusercontent.com/Megabre/CloudflareManager/refs/heads/main/cfmanage3.png)
+![Cloudflare Manager](https://raw.githubusercontent.com/Megabre/CloudflareManager/refs/heads/main/cfmanager4.png)
+
