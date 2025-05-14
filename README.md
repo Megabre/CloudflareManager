@@ -1,4 +1,4 @@
-# WhmcsCloudflare
+# Whmcs Cloudflare MAnager Modules
 Whmcs Cloudflare DNS Mnager Whmcs içinde Cloudflare'da bulunan domainlerin DNS kontrol işlemleri için yapılmış basit sade ve kullanışlı bir modüldür.
 
 # Kurulum:
