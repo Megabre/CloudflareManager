@@ -15,3 +15,5 @@ Ardından modülü kullanmaya başlayabilirsiniz.
 ![Cloudflare Manager](https://raw.githubusercontent.com/Megabre/CloudflareManager/refs/heads/main/cfmanage3.png)
 ![Cloudflare Manager](https://raw.githubusercontent.com/Megabre/CloudflareManager/refs/heads/main/cfmanager4.png)
 
+Detaylar için : https://my.megabre.com/announcements/4/Whmcs-Cloudflare-Manager-Modules-NEW-Module.html
+
