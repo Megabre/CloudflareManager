@@ -1,19 +1,15 @@
 # Whmcs Cloudflare Manager Modules
-Whmcs Cloudflare DNS Mnager Whmcs içinde Cloudflare'da bulunan domainlerin DNS kontrol işlemleri için yapılmış basit sade ve kullanışlı bir modüldür.
 
-# Kurulum:
-Modülü; Whmcs/modules/addons/cloudflaremanager
-Adresine yükleyin, Whmcs kontrol panelinde ilave modüller kısmından aktif edin. 
+Whmcs Cloudflare DNS Manager is a simple, straightforward, and useful module within Whmcs for managing DNS settings for domains hosted on Cloudflare.
+# Installation:
+1- Upload the module to: Whmcs/modules/addons/cloudflaremanager
+Activate it from the additional modules section in the Whmcs control panel.
 
-Cloudflare'da DNS Zone api token oluşturup modülün kurulum alanında api key isteyen yere girin (Mail adresini boş bırakın)
+2- Simply activate the module using the Cloudflare Global API key.
+3- The sections for creating custom DNS zones in the old system are no longer necessary in the new version. 
 
-Ardından modülü kullanmaya başlayabilirsiniz.
+![Cloudflare Whmcs module](https://raw.githubusercontent.com/Megabre/CloudflareManager/refs/heads/main/screenshot.png)
+![Cloudflare Whmcs](https://raw.githubusercontent.com/Megabre/CloudflareManager/refs/heads/main/screenshot2.png)
 
-
-![Cloudflare Manager](https://raw.githubusercontent.com/Megabre/CloudflareManager/refs/heads/main/cfmanage.png)
-![Cloudflare Manager](https://raw.githubusercontent.com/Megabre/CloudflareManager/refs/heads/main/cfmanager2.png)
-![Cloudflare Manager](https://raw.githubusercontent.com/Megabre/CloudflareManager/refs/heads/main/cfmanage3.png)
-![Cloudflare Manager](https://raw.githubusercontent.com/Megabre/CloudflareManager/refs/heads/main/cfmanager4.png)
-
-Detaylar için : https://my.megabre.com/announcements/4/Whmcs-Cloudflare-Manager-Modules-NEW-Module.html
+Detaylar için : [Cloudflare Whmcs Modules](https://www.megabre.com/whmcs-cloudflare-manager.php)
 
