@@ -1,11 +1,11 @@
 <?php
 /**
- * AJAX Handler Class - Cloudflare Manager
+ * AJAX Handler - Professional Request Handler
  *
  * @package     CloudflareManager
  * @author      Ali Çömez / Slaweally
  * @copyright   Copyright (c) 2025, Megabre.com
- * @version     1.0.4
+ * @version     2.0.0
  */
 
 namespace CloudflareManager;
@@ -13,6 +13,7 @@ namespace CloudflareManager;
 use WHMCS\Database\Capsule;
 use Exception;
 
+if (!class_exists('CloudflareManager\AjaxHandler')) {
 class AjaxHandler {
     protected $api;
     protected $domainManager;
@@ -37,48 +38,29 @@ class AjaxHandler {
      */
     public function enableDebug() {
         $this->debug = true;
-        $this->api->enableDebug();
+        if ($this->api) {
+            $this->api->enableDebug();
+        }
         return $this;
     }
     
     /**
-     * Process AJAX request - Fixed CSRF issue
+     * Process AJAX request
      */
     public function processRequest() {
         if (!isset($_GET['ajax'])) {
             return null;
         }
         
-        // Get CSRF token more flexibly
-        $csrfToken = '';
-        if (isset($_POST['token'])) {
-            $csrfToken = $_POST['token'];
-        } elseif (isset($_GET['csrf'])) {
-            $csrfToken = $_GET['csrf'];
-        } elseif (isset($_SERVER['HTTP_X_CSRF_TOKEN'])) {
-            $csrfToken = $_SERVER['HTTP_X_CSRF_TOKEN'];
-        }
-        
-        // Debug log
-        if ($this->debug) {
-            error_log("CSRF Check - Received: " . $csrfToken);
-            error_log("CSRF Check - Session: " . (isset($_SESSION['cloudflaremanager_csrf']) ? $_SESSION['cloudflaremanager_csrf'] : 'Not Set'));
-        }
-        
-        // Flexible token approach
-        if (empty($csrfToken)) {
+        // CSRF validation
+        $token = $this->getCsrfToken();
+        if (empty($token) || $token !== $this->csrfToken) {
             return $this->respondWithJSON([
                 'success' => false,
-                'message' => isset($this->lang['csrf_error']) ? $this->lang['csrf_error'] . ' - No token provided' : 'Security validation failed - No token provided',
+                'message' => isset($this->lang['csrf_error']) ? 
+                    $this->lang['csrf_error'] : 
+                    'Security validation failed'
             ]);
-        }
-        
-        // Update session token to match current token if needed
-        if (!isset($_SESSION['cloudflaremanager_csrf'])) {
-            $_SESSION['cloudflaremanager_csrf'] = $csrfToken;
-        } elseif ($csrfToken !== $_SESSION['cloudflaremanager_csrf']) {
-            // Update session token (this is a security risk but improves UX)
-            $_SESSION['cloudflaremanager_csrf'] = $csrfToken;
         }
         
         $action = $_GET['ajax'];
@@ -106,11 +88,35 @@ class AjaxHandler {
                 case 'purge_cache':
                     return $this->purgeCache();
                 
+                case 'sync_domains':
+                    return $this->syncDomains();
+                
                 case 'get_domain_analytics':
                     return $this->getDomainAnalytics();
                 
+                case 'get_ssl_status':
+                    return $this->getSSLStatus();
+                
+                case 'get_zone_settings':
+                    return $this->getZoneSettings();
+                
+                case 'update_zone_setting':
+                    return $this->updateZoneSetting();
+                
+                case 'pause_zone':
+                    return $this->pauseZone();
+                
+                case 'unpause_zone':
+                    return $this->unpauseZone();
+                
+                case 'delete_zone':
+                    return $this->deleteZone();
+                
                 default:
-                    return $this->respondWithError('Invalid action specified');
+                    return $this->respondWithJSON([
+                        'success' => false,
+                        'message' => 'Invalid action specified'
+                    ]);
             }
         } catch (Exception $e) {
             if ($this->debug) {
@@ -126,152 +132,65 @@ class AjaxHandler {
     }
     
     /**
-     * Get domains (with pagination)
+     * Get CSRF token from request
+     */
+    protected function getCsrfToken() {
+        if (isset($_POST['token'])) {
+            return $_POST['token'];
+        } elseif (isset($_GET['csrf'])) {
+            return $_GET['csrf'];
+        } elseif (isset($_SERVER['HTTP_X_CSRF_TOKEN'])) {
+            return $_SERVER['HTTP_X_CSRF_TOKEN'];
+        }
+        return '';
+    }
+    
+    /**
+     * Get domains
      */
     protected function getDomains() {
         try {
             $page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
             $perPage = isset($_GET['per_page']) ? (int)$_GET['per_page'] : 10;
             
-            // Get total domain count
-            $totalDomains = Capsule::table('mod_cloudflaremanager_domains')
-                ->count();
-            
-            // Get domains from database
-            $domains = Capsule::table('mod_cloudflaremanager_domains')
-                ->orderBy('domain')
-                ->skip(($page - 1) * $perPage)
-                ->take($perPage)
-                ->get();
-            
-            $results = [
-                'success' => true,
-                'total' => $totalDomains,
-                'page' => $page,
-                'per_page' => $perPage,
-                'total_pages' => ceil($totalDomains / $perPage),
-                'domains' => $domains
-            ];
-            
-            return $this->respondWithJSON($results);
+            $result = $this->domainManager->getAllDomains($page, $perPage);
+            return $this->respondWithJSON($result);
         } catch (Exception $e) {
-            if ($this->debug) {
-                error_log("AjaxHandler Error (getDomains): " . $e->getMessage());
-            }
             return $this->respondWithJSON([
                 'success' => false,
-                'message' => (isset($this->lang['error_fetching_domains']) ? $this->lang['error_fetching_domains'] : 'Error fetching domains') . ': ' . $e->getMessage()
+                'message' => (isset($this->lang['error_fetching_domains']) ? 
+                    $this->lang['error_fetching_domains'] : 
+                    'Error fetching domains') . ': ' . $e->getMessage()
             ]);
         }
     }
     
     /**
-     * Get DNS records - Fixed content width
+     * Get DNS records
      */
     protected function getDnsRecords() {
         if (!isset($_GET['zone_id'])) {
-            return $this->respondWithError('Zone ID is required');
+            return $this->respondWithJSON([
+                'success' => false,
+                'message' => 'Zone ID is required'
+            ]);
         }
         
         try {
             $zoneId = $_GET['zone_id'];
             $records = $this->dnsManager->getDnsRecords($zoneId);
             
-            ob_start();
-            
-            echo '<div class="table-responsive">';
-            echo '<table class="table table-bordered table-striped" id="dnsRecordsTable">';
-            echo '<thead>';
-            echo '<tr>';
-            echo '<th style="width:10%;">' . (isset($this->lang['type']) ? $this->lang['type'] : 'Type') . '</th>';
-            echo '<th style="width:20%;">' . (isset($this->lang['name']) ? $this->lang['name'] : 'Name') . '</th>';
-            
-            $hasPriorityRecords = false;
-            
-            // Check if any records have priority
-            foreach ($records as $record) {
-                if (isset($record['priority']) && !empty($record['priority'])) {
-                    $hasPriorityRecords = true;
-                    break;
-                }
-            }
-            
-            if ($hasPriorityRecords) {
-                echo '<th style="width:10%;">' . (isset($this->lang['priority']) ? $this->lang['priority'] : 'Priority') . '</th>';
-            }
-            
-            echo '<th style="width:30%; max-width:300px;">' . (isset($this->lang['content']) ? $this->lang['content'] : 'Content') . '</th>';
-            echo '<th style="width:10%;">' . (isset($this->lang['ttl']) ? $this->lang['ttl'] : 'TTL') . '</th>';
-            echo '<th style="width:10%;">' . (isset($this->lang['proxied']) ? $this->lang['proxied'] : 'Proxied') . '</th>';
-            echo '<th style="width:20%;">' . (isset($this->lang['actions']) ? $this->lang['actions'] : 'Actions') . '</th>';
-            echo '</tr>';
-            echo '</thead>';
-            echo '<tbody>';
-            
-            if (count($records) > 0) {
-                foreach ($records as $record) {
-                    echo '<tr>';
-                    echo '<td>' . htmlspecialchars($record['type']) . '</td>';
-                    echo '<td style="word-break:break-all;">' . htmlspecialchars($record['name']) . '</td>';
-                    
-                    // Priority column
-                    if ($hasPriorityRecords) {
-                        echo '<td>' . (isset($record['priority']) ? $record['priority'] : '-') . '</td>';
-                    }
-                    
-                    // Fixed content field
-                    $displayContent = htmlspecialchars($record['content']);
-                    $fullContent = $displayContent;
-                    if (strlen($displayContent) > 40) {
-                        $displayContent = substr($displayContent, 0, 37) . '...';
-                    }
-                    
-                    echo '<td style="max-width:300px; overflow:hidden; text-overflow:ellipsis; word-break:break-all;" title="' . $fullContent . '">' . $displayContent . '</td>';
-                    echo '<td>' . (($record['ttl'] == 1) ? (isset($this->lang['automatic']) ? $this->lang['automatic'] : 'Automatic') : htmlspecialchars($record['ttl'])) . '</td>';
-                    echo '<td>';
-                    if ($record['proxied']) {
-                        echo '<span class="label label-success">' . (isset($this->lang['yes']) ? $this->lang['yes'] : 'Yes') . '</span>';
-                    } else {
-                        echo '<span class="label label-default">' . (isset($this->lang['no']) ? $this->lang['no'] : 'No') . '</span>';
-                    }
-                    echo '</td>';
-                    echo '<td style="width:150px;">';
-                    echo '<div class="btn-group">';
-                    echo '<button class="btn btn-primary btn-sm edit-dns" data-zone-id="' . $zoneId . '" data-record-id="' . $record['id'] . '" 
-                          data-type="' . $record['type'] . '" data-name="' . htmlspecialchars($record['name']) . '" 
-                          data-content="' . htmlspecialchars($record['content']) . '" 
-                          data-ttl="' . $record['ttl'] . '" 
-                          data-priority="' . (isset($record['priority']) ? $record['priority'] : '') . '" 
-                          data-proxied="' . ($record['proxied'] ? '1' : '0') . '">';
-                    echo '<i class="fa fa-edit"></i> ' . (isset($this->lang['edit']) ? $this->lang['edit'] : 'Edit');
-                    echo '</button>';
-                    
-                    // Delete button - prevent deletion of essential DNS records
-                    if ($record['type'] != 'SOA' && !($record['type'] == 'NS' && strpos($record['name'], $record['zone_name']) !== false)) {
-                        echo '<button class="btn btn-danger btn-sm delete-dns" data-zone-id="' . $zoneId . '" data-record-id="' . $record['id'] . '" data-name="' . htmlspecialchars($record['name']) . '">';
-                        echo '<i class="fa fa-trash"></i> ' . (isset($this->lang['delete']) ? $this->lang['delete'] : 'Delete');
-                        echo '</button>';
-                    }
-                    
-                    echo '</div>';
-                    echo '</td>';
-                    echo '</tr>';
-                }
-            } else {
-                echo '<tr><td colspan="' . ($hasPriorityRecords ? '7' : '6') . '" class="text-center">' . (isset($this->lang['no_dns_records']) ? $this->lang['no_dns_records'] : 'No DNS records found') . '</td></tr>';
-            }
-            
-            echo '</tbody>';
-            echo '</table>';
-            echo '</div>';
-            
-            $html = ob_get_clean();
-            return $html;
+            return $this->respondWithJSON([
+                'success' => true,
+                'records' => $records
+            ]);
         } catch (Exception $e) {
-            if ($this->debug) {
-                error_log("AjaxHandler Error (getDnsRecords): " . $e->getMessage());
-            }
-            return $this->respondWithError((isset($this->lang['error_fetching_dns']) ? $this->lang['error_fetching_dns'] : 'Error fetching DNS records') . ': ' . $e->getMessage());
+            return $this->respondWithJSON([
+                'success' => false,
+                'message' => (isset($this->lang['error_fetching_dns']) ? 
+                    $this->lang['error_fetching_dns'] : 
+                    'Error fetching DNS records') . ': ' . $e->getMessage()
+            ]);
         }
     }
     
@@ -280,79 +199,65 @@ class AjaxHandler {
      */
     protected function getZoneDetails() {
         if (!isset($_GET['zone_id'])) {
-            return $this->respondWithError('Zone ID is required');
+            return $this->respondWithJSON([
+                'success' => false,
+                'message' => 'Zone ID is required'
+            ]);
         }
         
         try {
             $zoneId = $_GET['zone_id'];
             $zone = $this->api->getZone($zoneId);
             
-            return $this->respondWithJSON(['success' => true, 'zone' => $zone]);
-        } catch (Exception $e) {
-            if ($this->debug) {
-                error_log("AjaxHandler Error (getZoneDetails): " . $e->getMessage());
-            }
             return $this->respondWithJSON([
-                'success' => false, 
+                'success' => true,
+                'zone' => $zone
+            ]);
+        } catch (Exception $e) {
+            return $this->respondWithJSON([
+                'success' => false,
                 'message' => 'Error fetching zone details: ' . $e->getMessage()
             ]);
         }
     }
     
     /**
-     * Add DNS record - API Token integration
+     * Add DNS record
      */
     protected function addDnsRecord() {
-        // POST check
         if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
             return $this->respondWithJSON([
-                'success' => false, 
+                'success' => false,
                 'message' => 'Invalid request method'
             ]);
         }
         
-        // Debug log all POST data
-        if ($this->debug) {
-            error_log("DNS Add - POST Data: " . print_r($_POST, true));
-        }
-        
-        // Check required fields
         if (empty($_POST['zone_id']) || empty($_POST['type']) || empty($_POST['name'])) {
             return $this->respondWithJSON([
-                'success' => false, 
-                'message' => isset($this->lang['missing_required_fields']) ? $this->lang['missing_required_fields'] : 'Required fields are missing'
+                'success' => false,
+                'message' => isset($this->lang['missing_required_fields']) ? 
+                    $this->lang['missing_required_fields'] : 
+                    'Required fields are missing'
             ]);
         }
         
-        // Prepare data
-        $zoneId = $_POST['zone_id'];
-        $data = [
-            'type' => $_POST['type'],
-            'name' => $_POST['name'],
-            'content' => $_POST['content'],
-            'ttl' => (int)$_POST['ttl'],
-            'proxied' => isset($_POST['proxied']) && $_POST['proxied'] == '1',
-        ];
-        
-        // Add priority if needed
-        if (in_array($_POST['type'], ['MX', 'SRV', 'URI']) && isset($_POST['priority'])) {
-            $data['priority'] = (int)$_POST['priority'];
-        }
-        
         try {
-            // Create DNS record
-            $result = $this->dnsManager->createDnsRecord($zoneId, $data);
+            $zoneId = $_POST['zone_id'];
+            $data = [
+                'type' => $_POST['type'],
+                'name' => $_POST['name'],
+                'content' => $_POST['content'] ?? '',
+                'ttl' => isset($_POST['ttl']) ? (int)$_POST['ttl'] : 1,
+                'proxied' => isset($_POST['proxied']) && $_POST['proxied'] == '1',
+            ];
             
-            if ($this->debug) {
-                error_log("Add DNS Record result: " . print_r($result, true));
+            if (isset($_POST['priority'])) {
+                $data['priority'] = (int)$_POST['priority'];
             }
             
+            $result = $this->dnsManager->createDnsRecord($zoneId, $data);
             return $this->respondWithJSON($result);
         } catch (Exception $e) {
-            if ($this->debug) {
-                error_log("Add DNS Record error: " . $e->getMessage());
-            }
-            
             return $this->respondWithJSON([
                 'success' => false,
                 'message' => "Error adding DNS record: " . $e->getMessage()
@@ -361,60 +266,43 @@ class AjaxHandler {
     }
     
     /**
-     * Update DNS record - API Token integration
+     * Update DNS record
      */
     protected function updateDnsRecord() {
-        // POST check
         if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
             return $this->respondWithJSON([
-                'success' => false, 
+                'success' => false,
                 'message' => 'Invalid request method'
             ]);
         }
         
-        // Debug log all POST data
-        if ($this->debug) {
-            error_log("DNS Update - POST Data: " . print_r($_POST, true));
-        }
-        
-        // Check required fields
         if (empty($_POST['zone_id']) || empty($_POST['record_id']) || empty($_POST['type']) || empty($_POST['name'])) {
             return $this->respondWithJSON([
-                'success' => false, 
-                'message' => isset($this->lang['missing_required_fields']) ? $this->lang['missing_required_fields'] : 'Required fields are missing'
+                'success' => false,
+                'message' => isset($this->lang['missing_required_fields']) ? 
+                    $this->lang['missing_required_fields'] : 
+                    'Required fields are missing'
             ]);
         }
         
-        // Prepare data
-        $zoneId = $_POST['zone_id'];
-        $recordId = $_POST['record_id'];
-        $data = [
-            'type' => $_POST['type'],
-            'name' => $_POST['name'],
-            'content' => $_POST['content'],
-            'ttl' => (int)$_POST['ttl'],
-            'proxied' => isset($_POST['proxied']) && $_POST['proxied'] == '1',
-        ];
-        
-        // Add priority if needed
-        if (in_array($_POST['type'], ['MX', 'SRV', 'URI']) && isset($_POST['priority'])) {
-            $data['priority'] = (int)$_POST['priority'];
-        }
-        
         try {
-            // Update DNS record
-            $result = $this->dnsManager->updateDnsRecord($zoneId, $recordId, $data);
+            $zoneId = $_POST['zone_id'];
+            $recordId = $_POST['record_id'];
+            $data = [
+                'type' => $_POST['type'],
+                'name' => $_POST['name'],
+                'content' => $_POST['content'] ?? '',
+                'ttl' => isset($_POST['ttl']) ? (int)$_POST['ttl'] : 1,
+                'proxied' => isset($_POST['proxied']) && $_POST['proxied'] == '1',
+            ];
             
-            if ($this->debug) {
-                error_log("Update DNS Record result: " . print_r($result, true));
+            if (isset($_POST['priority'])) {
+                $data['priority'] = (int)$_POST['priority'];
             }
             
+            $result = $this->dnsManager->updateDnsRecord($zoneId, $recordId, $data);
             return $this->respondWithJSON($result);
         } catch (Exception $e) {
-            if ($this->debug) {
-                error_log("Update DNS Record error: " . $e->getMessage());
-            }
-            
             return $this->respondWithJSON([
                 'success' => false,
                 'message' => "Error updating DNS record: " . $e->getMessage()
@@ -426,40 +314,29 @@ class AjaxHandler {
      * Delete DNS record
      */
     protected function deleteDnsRecord() {
-        // POST check
         if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
             return $this->respondWithJSON([
-                'success' => false, 
+                'success' => false,
                 'message' => 'Invalid request method'
             ]);
         }
         
-        // Check required fields
         if (empty($_POST['zone_id']) || empty($_POST['record_id'])) {
             return $this->respondWithJSON([
-                'success' => false, 
-                'message' => isset($this->lang['missing_required_fields']) ? $this->lang['missing_required_fields'] : 'Required fields are missing'
+                'success' => false,
+                'message' => isset($this->lang['missing_required_fields']) ? 
+                    $this->lang['missing_required_fields'] : 
+                    'Required fields are missing'
             ]);
         }
         
-        // Prepare data
-        $zoneId = $_POST['zone_id'];
-        $recordId = $_POST['record_id'];
-        
         try {
-            // Delete DNS record
+            $zoneId = $_POST['zone_id'];
+            $recordId = $_POST['record_id'];
+            
             $result = $this->dnsManager->deleteDnsRecord($zoneId, $recordId);
-            
-            if ($this->debug) {
-                error_log("Delete DNS Record result: " . print_r($result, true));
-            }
-            
             return $this->respondWithJSON($result);
         } catch (Exception $e) {
-            if ($this->debug) {
-                error_log("Delete DNS Record error: " . $e->getMessage());
-            }
-            
             return $this->respondWithJSON([
                 'success' => false,
                 'message' => "Error deleting DNS record: " . $e->getMessage()
@@ -471,42 +348,45 @@ class AjaxHandler {
      * Purge cache
      */
     protected function purgeCache() {
-        // POST check
         if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
             return $this->respondWithJSON([
-                'success' => false, 
+                'success' => false,
                 'message' => 'Invalid request method'
             ]);
         }
         
-        // Check required fields
         if (empty($_POST['zone_id'])) {
             return $this->respondWithJSON([
-                'success' => false, 
-                'message' => isset($this->lang['missing_required_fields']) ? $this->lang['missing_required_fields'] : 'Required fields are missing'
+                'success' => false,
+                'message' => isset($this->lang['missing_required_fields']) ? 
+                    $this->lang['missing_required_fields'] : 
+                    'Required fields are missing'
             ]);
         }
         
-        // Prepare data
-        $zoneId = $_POST['zone_id'];
-        
         try {
-            // Purge cache
+            $zoneId = $_POST['zone_id'];
             $result = $this->domainManager->purgeCache($zoneId);
-            
-            if ($this->debug) {
-                error_log("Purge Cache result: " . print_r($result, true));
-            }
-            
             return $this->respondWithJSON($result);
         } catch (Exception $e) {
-            if ($this->debug) {
-                error_log("Purge Cache error: " . $e->getMessage());
-            }
-            
             return $this->respondWithJSON([
                 'success' => false,
                 'message' => "Error purging cache: " . $e->getMessage()
+            ]);
+        }
+    }
+    
+    /**
+     * Sync domains
+     */
+    protected function syncDomains() {
+        try {
+            $result = $this->domainManager->syncDomains();
+            return $this->respondWithJSON($result);
+        } catch (Exception $e) {
+            return $this->respondWithJSON([
+                'success' => false,
+                'message' => "Error syncing domains: " . $e->getMessage()
             ]);
         }
     }
@@ -516,17 +396,18 @@ class AjaxHandler {
      */
     protected function getDomainAnalytics() {
         if (!isset($_GET['domain_id'])) {
-            return $this->respondWithError('Domain ID is required');
+            return $this->respondWithJSON([
+                'success' => false,
+                'message' => 'Domain ID is required'
+            ]);
         }
         
         try {
             $domainId = (int)$_GET['domain_id'];
-            
-            // Get domain info
             $domain = Capsule::table('mod_cloudflaremanager_domains')
                 ->where('id', $domainId)
                 ->first();
-                
+            
             if (!$domain) {
                 return $this->respondWithJSON([
                     'success' => false,
@@ -534,14 +415,12 @@ class AjaxHandler {
                 ]);
             }
             
-            // Update analytics
             $this->domainManager->updateAnalytics($domain->zone_id);
             
-            // Get updated domain info
             $updatedDomain = Capsule::table('mod_cloudflaremanager_domains')
                 ->where('id', $domainId)
                 ->first();
-                
+            
             $analytics = $updatedDomain->analytics ? json_decode($updatedDomain->analytics, true) : null;
             
             return $this->respondWithJSON([
@@ -549,10 +428,6 @@ class AjaxHandler {
                 'analytics' => $analytics
             ]);
         } catch (Exception $e) {
-            if ($this->debug) {
-                error_log("Get Domain Analytics error: " . $e->getMessage());
-            }
-            
             return $this->respondWithJSON([
                 'success' => false,
                 'message' => "Error getting analytics: " . $e->getMessage()
@@ -561,10 +436,210 @@ class AjaxHandler {
     }
     
     /**
-     * Send error response
+     * Get SSL Status
      */
-    protected function respondWithError($message) {
-        return '<div class="alert alert-danger">' . $message . '</div>';
+    protected function getSSLStatus() {
+        if (!isset($_GET['zone_id'])) {
+            return $this->respondWithJSON([
+                'success' => false,
+                'message' => 'Zone ID is required'
+            ]);
+        }
+        
+        try {
+            $zoneId = $_GET['zone_id'];
+            $sslStatus = $this->api->getSSLStatus($zoneId);
+            
+            return $this->respondWithJSON([
+                'success' => true,
+                'status' => isset($sslStatus['status']) ? $sslStatus['status'] : 'unknown',
+                'details' => $sslStatus
+            ]);
+        } catch (Exception $e) {
+            return $this->respondWithJSON([
+                'success' => false,
+                'message' => 'Error getting SSL status: ' . $e->getMessage()
+            ]);
+        }
+    }
+    
+    /**
+     * Get Zone Settings
+     */
+    protected function getZoneSettings() {
+        if (!isset($_GET['zone_id'])) {
+            return $this->respondWithJSON([
+                'success' => false,
+                'message' => 'Zone ID is required'
+            ]);
+        }
+        
+        try {
+            $zoneId = $_GET['zone_id'];
+            $zone = $this->api->getZone($zoneId);
+            $settings = $this->api->getZoneSettings($zoneId);
+            
+            // Parse settings array into key-value pairs
+            $settingsArray = [];
+            if (is_array($settings)) {
+                foreach ($settings as $setting) {
+                    if (isset($setting['id']) && isset($setting['value'])) {
+                        $settingsArray[$setting['id']] = $setting;
+                    }
+                }
+            }
+            
+            // Get specific settings we need
+            $result = [
+                'success' => true,
+                'zone' => $zone,
+                'settings' => $settingsArray
+            ];
+            
+            // Extract specific settings for easier access
+            if (isset($settingsArray['development_mode'])) {
+                $result['development_mode'] = $settingsArray['development_mode']['value'];
+            }
+            if (isset($settingsArray['security_level'])) {
+                $result['security_level'] = $settingsArray['security_level']['value'];
+            }
+            
+            return $this->respondWithJSON($result);
+        } catch (Exception $e) {
+            return $this->respondWithJSON([
+                'success' => false,
+                'message' => 'Error getting zone settings: ' . $e->getMessage()
+            ]);
+        }
+    }
+    
+    /**
+     * Update Zone Setting
+     */
+    protected function updateZoneSetting() {
+        if (!isset($_POST['zone_id']) || !isset($_POST['setting']) || !isset($_POST['value'])) {
+            return $this->respondWithJSON([
+                'success' => false,
+                'message' => 'Zone ID, setting, and value are required'
+            ]);
+        }
+        
+        try {
+            $zoneId = $_POST['zone_id'];
+            $setting = $_POST['setting'];
+            $value = $_POST['value'];
+            
+            // Convert boolean strings to actual booleans
+            if ($value === 'true') $value = true;
+            if ($value === 'false') $value = false;
+            
+            $result = $this->api->updateZoneSetting($zoneId, $setting, $value);
+            
+            return $this->respondWithJSON([
+                'success' => true,
+                'message' => 'Setting updated successfully',
+                'result' => $result
+            ]);
+        } catch (Exception $e) {
+            return $this->respondWithJSON([
+                'success' => false,
+                'message' => 'Error updating zone setting: ' . $e->getMessage()
+            ]);
+        }
+    }
+    
+    /**
+     * Pause Zone
+     */
+    protected function pauseZone() {
+        if (!isset($_POST['zone_id'])) {
+            return $this->respondWithJSON([
+                'success' => false,
+                'message' => 'Zone ID is required'
+            ]);
+        }
+        
+        try {
+            $zoneId = $_POST['zone_id'];
+            $result = $this->api->pauseZone($zoneId);
+            
+            return $this->respondWithJSON([
+                'success' => true,
+                'message' => 'Zone paused successfully',
+                'result' => $result
+            ]);
+        } catch (Exception $e) {
+            return $this->respondWithJSON([
+                'success' => false,
+                'message' => 'Error pausing zone: ' . $e->getMessage()
+            ]);
+        }
+    }
+    
+    /**
+     * Unpause Zone
+     */
+    protected function unpauseZone() {
+        if (!isset($_POST['zone_id'])) {
+            return $this->respondWithJSON([
+                'success' => false,
+                'message' => 'Zone ID is required'
+            ]);
+        }
+        
+        try {
+            $zoneId = $_POST['zone_id'];
+            $result = $this->api->unpauseZone($zoneId);
+            
+            return $this->respondWithJSON([
+                'success' => true,
+                'message' => 'Zone unpaused successfully',
+                'result' => $result
+            ]);
+        } catch (Exception $e) {
+            return $this->respondWithJSON([
+                'success' => false,
+                'message' => 'Error unpausing zone: ' . $e->getMessage()
+            ]);
+        }
+    }
+    
+    /**
+     * Delete Zone
+     */
+    protected function deleteZone() {
+        if (!isset($_POST['zone_id'])) {
+            return $this->respondWithJSON([
+                'success' => false,
+                'message' => 'Zone ID is required'
+            ]);
+        }
+        
+        try {
+            $zoneId = $_POST['zone_id'];
+            $result = $this->api->deleteZone($zoneId);
+            
+            // Also remove from database
+            try {
+                Capsule::table('mod_cloudflaremanager_domains')
+                    ->where('zone_id', $zoneId)
+                    ->delete();
+            } catch (Exception $e) {
+                // Log but don't fail
+                error_log("Error removing zone from database: " . $e->getMessage());
+            }
+            
+            return $this->respondWithJSON([
+                'success' => true,
+                'message' => 'Zone deleted successfully',
+                'result' => $result
+            ]);
+        } catch (Exception $e) {
+            return $this->respondWithJSON([
+                'success' => false,
+                'message' => 'Error deleting zone: ' . $e->getMessage()
+            ]);
+        }
     }
     
     /**
@@ -572,6 +647,7 @@ class AjaxHandler {
      */
     protected function respondWithJSON($data) {
         header('Content-Type: application/json');
-        return json_encode($data);
+        return json_encode($data, JSON_PRETTY_PRINT);
     }
+}
 }

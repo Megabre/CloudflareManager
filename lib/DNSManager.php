@@ -1,11 +1,11 @@
 <?php
 /**
- * DNS Management Class - Cloudflare Manager
+ * DNS Manager - Professional DNS Record Management
  *
  * @package     CloudflareManager
  * @author      Ali Çömez / Slaweally
  * @copyright   Copyright (c) 2025, Megabre.com
- * @version     1.0.4
+ * @version     2.0.0
  */
 
 namespace CloudflareManager;
@@ -13,6 +13,7 @@ namespace CloudflareManager;
 use WHMCS\Database\Capsule;
 use Exception;
 
+if (!class_exists('CloudflareManager\DNSManager')) {
 class DNSManager {
     protected $api;
     protected $lang = [];
@@ -31,7 +32,9 @@ class DNSManager {
      */
     public function enableDebug() {
         $this->debug = true;
-        $this->api->enableDebug();
+        if ($this->api) {
+            $this->api->enableDebug();
+        }
         return $this;
     }
     
@@ -40,21 +43,21 @@ class DNSManager {
      */
     public function getSupportedRecordTypes() {
         return [
-            'A' => 'A',
-            'AAAA' => 'AAAA',
-            'CNAME' => 'CNAME',
-            'TXT' => 'TXT',
-            'MX' => 'MX',
-            'NS' => 'NS',
-            'SRV' => 'SRV',
-            'CAA' => 'CAA',
-            'DNSKEY' => 'DNSKEY',
-            'DS' => 'DS',
-            'NAPTR' => 'NAPTR',
-            'SMIMEA' => 'SMIMEA',
-            'SSHFP' => 'SSHFP',
-            'TLSA' => 'TLSA',
-            'URI' => 'URI'
+            'A' => 'A (IPv4 Address)',
+            'AAAA' => 'AAAA (IPv6 Address)',
+            'CNAME' => 'CNAME (Canonical Name)',
+            'TXT' => 'TXT (Text Record)',
+            'MX' => 'MX (Mail Exchange)',
+            'NS' => 'NS (Name Server)',
+            'SRV' => 'SRV (Service Record)',
+            'CAA' => 'CAA (Certificate Authority Authorization)',
+            'DNSKEY' => 'DNSKEY (DNS Key)',
+            'DS' => 'DS (Delegation Signer)',
+            'NAPTR' => 'NAPTR (Name Authority Pointer)',
+            'SMIMEA' => 'SMIMEA (S/MIME Certificate)',
+            'SSHFP' => 'SSHFP (SSH Fingerprint)',
+            'TLSA' => 'TLSA (Transport Layer Security)',
+            'URI' => 'URI (Uniform Resource Identifier)'
         ];
     }
     
@@ -71,90 +74,104 @@ class DNSManager {
             1800 => '30 ' . (isset($this->lang['minutes']) ? $this->lang['minutes'] : 'Minutes'),
             3600 => '1 ' . (isset($this->lang['hour']) ? $this->lang['hour'] : 'Hour'),
             7200 => '2 ' . (isset($this->lang['hours']) ? $this->lang['hours'] : 'Hours'),
+            18000 => '5 ' . (isset($this->lang['hours']) ? $this->lang['hours'] : 'Hours'),
             43200 => '12 ' . (isset($this->lang['hours']) ? $this->lang['hours'] : 'Hours'),
             86400 => '1 ' . (isset($this->lang['day']) ? $this->lang['day'] : 'Day')
         ];
     }
     
     /**
-     * Get example content for record type
-     */
-    public function getRecordTypeExample($type) {
-        $examples = [
-            'A' => '192.168.0.1',
-            'AAAA' => '2001:0db8:85a3:0000:0000:8a2e:0370:7334',
-            'CNAME' => 'example.com',
-            'MX' => 'mail.example.com',
-            'TXT' => 'v=spf1 include:example.com ~all',
-            'NS' => 'ns1.example.com',
-            'SRV' => 'sip.example.com',
-            'CAA' => '0 issue "letsencrypt.org"',
-            'DNSKEY' => '257 3 13 mdsswUyr3DPW132mOi8V9xESWE8jTo0dxCjjnopKl+GqJxpVXckHAeF+KkxLbxILfDLUT0rAK9iUzy1L53eKGQ==',
-            'DS' => '12345 13 2 1F8188345CD3BE1F533B5CE927F2C2A9B80C0D041F46E9E6210F594F5D5C8BA9',
-            'NAPTR' => '10 100 "s" "SIP+D2T" "" _sip._tcp.example.com',
-            'SMIMEA' => '3 0 0 308201A2300D06092A864886F70D01010B05003059301D060355045A13...',
-            'SSHFP' => '2 1 123456789abcdef67890123456789abcdef67890',
-            'TLSA' => '3 0 1 d2abde240d7cd3ee6b4b28c54df034b97983a1d16e8a410e4561cb106618e971',
-            'URI' => '10 1 "https://example.com"'
-        ];
-        
-        return isset($examples[$type]) ? $examples[$type] : '';
-    }
-    
-    /**
      * Check if record type supports proxying
      */
     public function isProxyableType($type) {
-        $proxyableTypes = ['A', 'AAAA', 'CNAME'];
-        return in_array($type, $proxyableTypes);
+        return in_array(strtoupper($type), ['A', 'AAAA', 'CNAME']);
     }
     
     /**
      * Check if record type needs priority field
      */
     public function needsPriority($type) {
-        return in_array($type, ['MX', 'SRV', 'URI']);
+        return in_array(strtoupper($type), ['MX', 'SRV', 'URI']);
     }
     
     /**
-     * Get DNS records
+     * Validate DNS record data
      */
-    public function getDnsRecords($zoneId) {
+    public function validateRecordData($type, $name, $content, $priority = null) {
+        $errors = [];
+        
+        if (empty($type)) {
+            $errors[] = isset($this->lang['type_required']) ? $this->lang['type_required'] : 'Type is required';
+        }
+        
+        if (empty($name)) {
+            $errors[] = isset($this->lang['name_required']) ? $this->lang['name_required'] : 'Name is required';
+        }
+        
+        if (empty($content)) {
+            $errors[] = isset($this->lang['content_required']) ? $this->lang['content_required'] : 'Content is required';
+        }
+        
+        // Type-specific validation
+        switch (strtoupper($type)) {
+            case 'A':
+                if (!filter_var($content, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+                    $errors[] = isset($this->lang['invalid_ipv4_address']) ? 
+                        $this->lang['invalid_ipv4_address'] : 'Invalid IPv4 address';
+                }
+                break;
+                
+            case 'AAAA':
+                if (!filter_var($content, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6)) {
+                    $errors[] = isset($this->lang['invalid_ipv6_address']) ? 
+                        $this->lang['invalid_ipv6_address'] : 'Invalid IPv6 address';
+                }
+                break;
+                
+            case 'MX':
+            case 'SRV':
+            case 'URI':
+                if ($priority === null || $priority === '') {
+                    $errors[] = isset($this->lang['priority_required']) ? 
+                        $this->lang['priority_required'] : 'Priority is required for this record type';
+                } elseif (!is_numeric($priority) || $priority < 0 || $priority > 65535) {
+                    $errors[] = isset($this->lang['invalid_priority']) ? 
+                        $this->lang['invalid_priority'] : 'Priority must be between 0 and 65535';
+                }
+                break;
+        }
+        
+        return $errors;
+    }
+    
+    /**
+     * Get DNS records for a zone
+     */
+    public function getDnsRecords($zoneId, $page = 1, $perPage = 100, $type = '') {
         try {
-            $records = $this->api->listDnsRecords($zoneId);
+            $records = $this->api->listDnsRecords($zoneId, $page, $perPage, $type);
             
-            // Process records and add zone name
+            // Get domain info for zone name
             $domainInfo = Capsule::table('mod_cloudflaremanager_domains')
                 ->where('zone_id', $zoneId)
-                ->first();
-                
-            if ($domainInfo) {
+                ->first(['domain']);
+            
+            if ($domainInfo && is_array($records)) {
                 foreach ($records as &$record) {
                     $record['zone_name'] = $domainInfo->domain;
                 }
             }
             
-            return $records;
+            return is_array($records) ? $records : [];
         } catch (Exception $e) {
             if ($this->debug) {
                 error_log("DNSManager Error (getDnsRecords): " . $e->getMessage());
             }
-            throw new Exception(isset($this->lang['error_fetching_dns']) ? $this->lang['error_fetching_dns'] . ': ' . $e->getMessage() : 'Error fetching DNS records: ' . $e->getMessage());
-        }
-    }
-    
-    /**
-     * Get DNS record
-     */
-    public function getDnsRecord($zoneId, $recordId) {
-        try {
-            $record = $this->api->getDnsRecord($zoneId, $recordId);
-            return $record;
-        } catch (Exception $e) {
-            if ($this->debug) {
-                error_log("DNSManager Error (getDnsRecord): " . $e->getMessage());
-            }
-            throw new Exception(isset($this->lang['error_fetching_dns_record']) ? $this->lang['error_fetching_dns_record'] . ': ' . $e->getMessage() : 'Error fetching DNS record: ' . $e->getMessage());
+            throw new Exception(
+                isset($this->lang['error_fetching_dns']) ? 
+                    $this->lang['error_fetching_dns'] . ': ' . $e->getMessage() : 
+                    'Error fetching DNS records: ' . $e->getMessage()
+            );
         }
     }
     
@@ -165,6 +182,8 @@ class DNSManager {
         try {
             $records = Capsule::table('mod_cloudflaremanager_dns_records')
                 ->where('domain_id', $domainId)
+                ->orderBy('type')
+                ->orderBy('name')
                 ->get();
             
             return $records;
@@ -172,87 +191,75 @@ class DNSManager {
             if ($this->debug) {
                 error_log("DNSManager Error (getDnsRecordsFromDB): " . $e->getMessage());
             }
-            throw new Exception(isset($this->lang['database_error']) ? $this->lang['database_error'] . ': ' . $e->getMessage() : 'Database error: ' . $e->getMessage());
+            return [];
         }
     }
     
     /**
-     * Create DNS record - fixed and improved
+     * Get single DNS record
+     */
+    public function getDnsRecord($zoneId, $recordId) {
+        try {
+            return $this->api->getDnsRecord($zoneId, $recordId);
+        } catch (Exception $e) {
+            if ($this->debug) {
+                error_log("DNSManager Error (getDnsRecord): " . $e->getMessage());
+            }
+            throw new Exception(
+                isset($this->lang['error_fetching_dns_record']) ? 
+                    $this->lang['error_fetching_dns_record'] . ': ' . $e->getMessage() : 
+                    'Error fetching DNS record: ' . $e->getMessage()
+            );
+        }
+    }
+    
+    /**
+     * Create DNS record
      */
     public function createDnsRecord($zoneId, $data) {
         try {
             // Validate data
-            if (empty($data['type']) || empty($data['name']) || !isset($data['content'])) {
-                throw new Exception(isset($this->lang['missing_required_fields']) ? $this->lang['missing_required_fields'] : 'Required fields are missing');
+            $type = isset($data['type']) ? $data['type'] : '';
+            $name = isset($data['name']) ? $data['name'] : '';
+            $content = isset($data['content']) ? $data['content'] : '';
+            $priority = isset($data['priority']) ? $data['priority'] : null;
+            
+            $errors = $this->validateRecordData($type, $name, $content, $priority);
+            if (!empty($errors)) {
+                throw new Exception(implode(', ', $errors));
             }
             
-            // Specific field validations
-            switch ($data['type']) {
-                case 'A':
-                    if (!filter_var($data['content'], FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
-                        throw new Exception(isset($this->lang['invalid_ipv4_address']) ? $this->lang['invalid_ipv4_address'] : 'Invalid IPv4 address');
-                    }
-                    break;
-                
-                case 'AAAA':
-                    if (!filter_var($data['content'], FILTER_VALIDATE_IP, FILTER_FLAG_IPV6)) {
-                        throw new Exception(isset($this->lang['invalid_ipv6_address']) ? $this->lang['invalid_ipv6_address'] : 'Invalid IPv6 address');
-                    }
-                    break;
-                
-                case 'MX':
-                    if (!isset($data['priority'])) {
-                        $data['priority'] = 10; // Default value
-                    }
-                    break;
-                
-                case 'SRV':
-                    if (!isset($data['priority'])) {
-                        $data['priority'] = 1; // Default value
-                    }
-                    break;
-                    
-                case 'URI':
-                    if (!isset($data['priority'])) {
-                        $data['priority'] = 1; // Default value
-                    }
-                    break;
+            // Prepare data
+            $recordData = [
+                'type' => strtoupper($type),
+                'name' => $name,
+                'content' => $content,
+                'ttl' => isset($data['ttl']) ? (int)$data['ttl'] : 1,
+            ];
+            
+            // Add proxied flag (only for proxyable types)
+            if ($this->isProxyableType($type)) {
+                $recordData['proxied'] = isset($data['proxied']) && $data['proxied'] == '1';
+            } else {
+                $recordData['proxied'] = false;
             }
             
-            // Turn off proxy for non-proxyable types
-            if (!$this->isProxyableType($data['type'])) {
-                $data['proxied'] = false;
+            // Add priority if needed
+            if ($this->needsPriority($type) && $priority !== null) {
+                $recordData['priority'] = (int)$priority;
             }
             
-            // Fix numeric values
-            if (isset($data['ttl'])) {
-                $data['ttl'] = (int)$data['ttl'];
-            }
+            // Create record via API
+            $result = $this->api->createDnsRecord($zoneId, $recordData);
             
-            if (isset($data['priority'])) {
-                $data['priority'] = (int)$data['priority'];
-            }
-            
-            if ($this->debug) {
-                error_log("Creating DNS Record: " . json_encode($data));
-            }
-            
-            // Call API
-            $result = $this->api->createDnsRecord($zoneId, $data);
-            
-            if ($this->debug) {
-                error_log("API Response: " . json_encode($result));
-            }
-            
-            // Get domain ID
+            // Save to database
             $domainId = Capsule::table('mod_cloudflaremanager_domains')
                 ->where('zone_id', $zoneId)
                 ->value('id');
             
-            if ($domainId) {
-                // Save to database
+            if ($domainId && isset($result['id'])) {
                 $now = date('Y-m-d H:i:s');
-                $insertData = [
+                Capsule::table('mod_cloudflaremanager_dns_records')->insert([
                     'domain_id' => $domainId,
                     'record_id' => $result['id'],
                     'type' => $result['type'],
@@ -260,102 +267,70 @@ class DNSManager {
                     'content' => $result['content'],
                     'ttl' => $result['ttl'],
                     'proxied' => $result['proxied'] ? 1 : 0,
+                    'priority' => isset($result['priority']) ? $result['priority'] : null,
                     'created_at' => $now,
                     'updated_at' => $now,
-                ];
-                
-                // Add priority
-                if (isset($result['priority'])) {
-                    $insertData['priority'] = $result['priority'];
-                }
-                
-                Capsule::table('mod_cloudflaremanager_dns_records')->insert($insertData);
+                ]);
             }
             
             return [
                 'success' => true,
-                'message' => isset($this->lang['dns_record_added']) ? $this->lang['dns_record_added'] : 'DNS record added successfully',
+                'message' => isset($this->lang['dns_record_added']) ? 
+                    $this->lang['dns_record_added'] : 
+                    'DNS record added successfully',
                 'record' => $result
             ];
         } catch (Exception $e) {
             if ($this->debug) {
                 error_log("DNSManager Error (createDnsRecord): " . $e->getMessage());
-                error_log("Stack Trace: " . $e->getTraceAsString());
             }
             return [
                 'success' => false,
-                'message' => (isset($this->lang['dns_record_add_error']) ? $this->lang['dns_record_add_error'] : 'Error adding DNS record') . ': ' . $e->getMessage()
+                'message' => (isset($this->lang['dns_record_add_error']) ? 
+                    $this->lang['dns_record_add_error'] : 
+                    'Error adding DNS record') . ': ' . $e->getMessage()
             ];
         }
     }
     
     /**
-     * Update DNS record - fixed and improved
+     * Update DNS record
      */
     public function updateDnsRecord($zoneId, $recordId, $data) {
         try {
             // Validate data
-            if (empty($data['type']) || empty($data['name']) || !isset($data['content'])) {
-                throw new Exception(isset($this->lang['missing_required_fields']) ? $this->lang['missing_required_fields'] : 'Required fields are missing');
+            $type = isset($data['type']) ? $data['type'] : '';
+            $name = isset($data['name']) ? $data['name'] : '';
+            $content = isset($data['content']) ? $data['content'] : '';
+            $priority = isset($data['priority']) ? $data['priority'] : null;
+            
+            $errors = $this->validateRecordData($type, $name, $content, $priority);
+            if (!empty($errors)) {
+                throw new Exception(implode(', ', $errors));
             }
             
-            // Specific field validations
-            switch ($data['type']) {
-                case 'A':
-                    if (!filter_var($data['content'], FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
-                        throw new Exception(isset($this->lang['invalid_ipv4_address']) ? $this->lang['invalid_ipv4_address'] : 'Invalid IPv4 address');
-                    }
-                    break;
-                
-                case 'AAAA':
-                    if (!filter_var($data['content'], FILTER_VALIDATE_IP, FILTER_FLAG_IPV6)) {
-                        throw new Exception(isset($this->lang['invalid_ipv6_address']) ? $this->lang['invalid_ipv6_address'] : 'Invalid IPv6 address');
-                    }
-                    break;
-                
-                case 'MX':
-                    if (!isset($data['priority'])) {
-                        $data['priority'] = 10; // Default value
-                    }
-                    break;
-                
-                case 'SRV':
-                    if (!isset($data['priority'])) {
-                        $data['priority'] = 1; // Default value
-                    }
-                    break;
-                    
-                case 'URI':
-                    if (!isset($data['priority'])) {
-                        $data['priority'] = 1; // Default value
-                    }
-                    break;
+            // Prepare data
+            $recordData = [
+                'type' => strtoupper($type),
+                'name' => $name,
+                'content' => $content,
+                'ttl' => isset($data['ttl']) ? (int)$data['ttl'] : 1,
+            ];
+            
+            // Add proxied flag (only for proxyable types)
+            if ($this->isProxyableType($type)) {
+                $recordData['proxied'] = isset($data['proxied']) && $data['proxied'] == '1';
+            } else {
+                $recordData['proxied'] = false;
             }
             
-            // Turn off proxy for non-proxyable types
-            if (!$this->isProxyableType($data['type'])) {
-                $data['proxied'] = false;
+            // Add priority if needed
+            if ($this->needsPriority($type) && $priority !== null) {
+                $recordData['priority'] = (int)$priority;
             }
             
-            // Fix numeric values
-            if (isset($data['ttl'])) {
-                $data['ttl'] = (int)$data['ttl'];
-            }
-            
-            if (isset($data['priority'])) {
-                $data['priority'] = (int)$data['priority'];
-            }
-            
-            if ($this->debug) {
-                error_log("Updating DNS Record: " . json_encode($data));
-            }
-            
-            // Call API
-            $result = $this->api->updateDnsRecord($zoneId, $recordId, $data);
-            
-            if ($this->debug) {
-                error_log("API Response: " . json_encode($result));
-            }
+            // Update record via API
+            $result = $this->api->updateDnsRecord($zoneId, $recordId, $recordData);
             
             // Update database
             $now = date('Y-m-d H:i:s');
@@ -368,7 +343,6 @@ class DNSManager {
                 'updated_at' => $now,
             ];
             
-            // Add priority
             if (isset($result['priority'])) {
                 $updateData['priority'] = $result['priority'];
             }
@@ -379,17 +353,20 @@ class DNSManager {
             
             return [
                 'success' => true,
-                'message' => isset($this->lang['dns_record_updated']) ? $this->lang['dns_record_updated'] : 'DNS record updated successfully',
+                'message' => isset($this->lang['dns_record_updated']) ? 
+                    $this->lang['dns_record_updated'] : 
+                    'DNS record updated successfully',
                 'record' => $result
             ];
         } catch (Exception $e) {
             if ($this->debug) {
                 error_log("DNSManager Error (updateDnsRecord): " . $e->getMessage());
-                error_log("Stack Trace: " . $e->getTraceAsString());
             }
             return [
                 'success' => false,
-                'message' => (isset($this->lang['dns_record_update_error']) ? $this->lang['dns_record_update_error'] : 'Error updating DNS record') . ': ' . $e->getMessage()
+                'message' => (isset($this->lang['dns_record_update_error']) ? 
+                    $this->lang['dns_record_update_error'] : 
+                    'Error updating DNS record') . ': ' . $e->getMessage()
             ];
         }
     }
@@ -399,8 +376,8 @@ class DNSManager {
      */
     public function deleteDnsRecord($zoneId, $recordId) {
         try {
-            // Call API
-            $result = $this->api->deleteDnsRecord($zoneId, $recordId);
+            // Delete via API
+            $this->api->deleteDnsRecord($zoneId, $recordId);
             
             // Delete from database
             Capsule::table('mod_cloudflaremanager_dns_records')
@@ -409,7 +386,9 @@ class DNSManager {
             
             return [
                 'success' => true,
-                'message' => isset($this->lang['dns_record_deleted']) ? $this->lang['dns_record_deleted'] : 'DNS record deleted successfully'
+                'message' => isset($this->lang['dns_record_deleted']) ? 
+                    $this->lang['dns_record_deleted'] : 
+                    'DNS record deleted successfully'
             ];
         } catch (Exception $e) {
             if ($this->debug) {
@@ -417,40 +396,58 @@ class DNSManager {
             }
             return [
                 'success' => false,
-                'message' => (isset($this->lang['dns_record_delete_error']) ? $this->lang['dns_record_delete_error'] : 'Error deleting DNS record') . ': ' . $e->getMessage()
+                'message' => (isset($this->lang['dns_record_delete_error']) ? 
+                    $this->lang['dns_record_delete_error'] : 
+                    'Error deleting DNS record') . ': ' . $e->getMessage()
             ];
         }
     }
     
     /**
-     * Sync DNS records by domain - optimized
+     * Sync DNS records for a domain
      */
     public function syncRecordsByDomain($domainId) {
         try {
-            // Get domain info first
             $domain = Capsule::table('mod_cloudflaremanager_domains')
                 ->where('id', $domainId)
                 ->first();
             
             if (!$domain) {
-                throw new Exception(isset($this->lang['domain_not_found']) ? $this->lang['domain_not_found'] : 'Domain not found');
+                throw new Exception(
+                    isset($this->lang['domain_not_found']) ? 
+                        $this->lang['domain_not_found'] : 
+                        'Domain not found'
+                );
             }
             
-            // Get DNS records
-            $records = $this->api->listDnsRecords($domain->zone_id);
+            // Get all DNS records from API
+            $allRecords = [];
+            $page = 1;
+            $perPage = 100;
+            
+            do {
+                $records = $this->api->listDnsRecords($domain->zone_id, $page, $perPage);
+                if (is_array($records)) {
+                    $allRecords = array_merge($allRecords, $records);
+                    $page++;
+                } else {
+                    break;
+                }
+            } while (count($records) == $perPage);
+            
             $now = date('Y-m-d H:i:s');
             
-            // Database operations - use transaction for optimization
-            Capsule::connection()->transaction(function () use ($domainId, $records, $now) {
+            // Use transaction for bulk operations
+            Capsule::connection()->transaction(function () use ($domainId, $allRecords, $now) {
                 // Clear existing records
                 Capsule::table('mod_cloudflaremanager_dns_records')
                     ->where('domain_id', $domainId)
                     ->delete();
                 
-                // Prepare new records
+                // Prepare bulk insert
                 $bulkInsertData = [];
-                foreach ($records as $record) {
-                    $insertData = [
+                foreach ($allRecords as $record) {
+                    $bulkInsertData[] = [
                         'domain_id' => $domainId,
                         'record_id' => $record['id'],
                         'type' => $record['type'],
@@ -458,28 +455,26 @@ class DNSManager {
                         'content' => $record['content'],
                         'ttl' => $record['ttl'],
                         'proxied' => $record['proxied'] ? 1 : 0,
+                        'priority' => isset($record['priority']) ? $record['priority'] : null,
                         'created_at' => $now,
                         'updated_at' => $now,
                     ];
-                    
-                    // Add priority
-                    if (isset($record['priority'])) {
-                        $insertData['priority'] = $record['priority'];
-                    }
-                    
-                    $bulkInsertData[] = $insertData;
                 }
                 
-                // Bulk insert (faster)
+                // Bulk insert
                 if (!empty($bulkInsertData)) {
-                    Capsule::table('mod_cloudflaremanager_dns_records')->insert($bulkInsertData);
+                    foreach (array_chunk($bulkInsertData, 100) as $chunk) {
+                        Capsule::table('mod_cloudflaremanager_dns_records')->insert($chunk);
+                    }
                 }
             });
             
             return [
                 'success' => true,
-                'count' => count($records),
-                'message' => isset($this->lang['dns_records_synced']) ? $this->lang['dns_records_synced'] : 'DNS records synchronized successfully'
+                'count' => count($allRecords),
+                'message' => isset($this->lang['dns_records_synced']) ? 
+                    $this->lang['dns_records_synced'] : 
+                    'DNS records synchronized successfully'
             ];
         } catch (Exception $e) {
             if ($this->debug) {
@@ -487,8 +482,11 @@ class DNSManager {
             }
             return [
                 'success' => false,
-                'message' => (isset($this->lang['dns_sync_error']) ? $this->lang['dns_sync_error'] : 'Error synchronizing DNS records') . ': ' . $e->getMessage()
+                'message' => (isset($this->lang['dns_sync_error']) ? 
+                    $this->lang['dns_sync_error'] : 
+                    'Error synchronizing DNS records') . ': ' . $e->getMessage()
             ];
         }
     }
+}
 }

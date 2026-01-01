@@ -1,11 +1,11 @@
 <?php
 /**
- * Domain Management Class - Cloudflare Manager
+ * Domain Manager - Professional Domain Management
  *
  * @package     CloudflareManager
  * @author      Ali Çömez / Slaweally
  * @copyright   Copyright (c) 2025, Megabre.com
- * @version     1.0.4
+ * @version     2.0.0
  */
 
 namespace CloudflareManager;
@@ -13,6 +13,7 @@ namespace CloudflareManager;
 use WHMCS\Database\Capsule;
 use Exception;
 
+if (!class_exists('CloudflareManager\DomainManager')) {
 class DomainManager {
     protected $api;
     protected $lang = [];
@@ -38,15 +39,12 @@ class DomainManager {
     }
     
     /**
-     * Get all domains - optimized and paginated
+     * Get all domains with pagination
      */
     public function getAllDomains($page = 1, $perPage = 10) {
         try {
-            // Get total domain count
-            $totalDomains = Capsule::table('mod_cloudflaremanager_domains')
-                ->count();
+            $totalDomains = Capsule::table('mod_cloudflaremanager_domains')->count();
             
-            // Get domains for the current page
             $domains = Capsule::table('mod_cloudflaremanager_domains')
                 ->orderBy('domain')
                 ->skip(($page - 1) * $perPage)
@@ -65,12 +63,16 @@ class DomainManager {
             if ($this->debug) {
                 error_log("DomainManager Error (getAllDomains): " . $e->getMessage());
             }
-            throw new Exception(isset($this->lang['error_fetching_domains']) ? $this->lang['error_fetching_domains'] . ': ' . $e->getMessage() : 'Error fetching domains: ' . $e->getMessage());
+            throw new Exception(
+                isset($this->lang['error_fetching_domains']) ? 
+                    $this->lang['error_fetching_domains'] . ': ' . $e->getMessage() : 
+                    'Error fetching domains: ' . $e->getMessage()
+            );
         }
     }
     
     /**
-     * Get specific domain information
+     * Get domain by zone ID
      */
     public function getDomain($zoneId) {
         try {
@@ -80,7 +82,6 @@ class DomainManager {
             
             $zone = $this->api->getZone($zoneId);
             
-            // Check if domain exists in database
             $domainInfo = Capsule::table('mod_cloudflaremanager_domains')
                 ->where('zone_id', $zoneId)
                 ->first();
@@ -94,30 +95,36 @@ class DomainManager {
             if ($this->debug) {
                 error_log("DomainManager Error (getDomain): " . $e->getMessage());
             }
-            throw new Exception(isset($this->lang['error_fetching_domain']) ? $this->lang['error_fetching_domain'] . ': ' . $e->getMessage() : 'Error fetching domain: ' . $e->getMessage());
+            throw new Exception(
+                isset($this->lang['error_fetching_domain']) ? 
+                    $this->lang['error_fetching_domain'] . ': ' . $e->getMessage() : 
+                    'Error fetching domain: ' . $e->getMessage()
+            );
         }
     }
     
     /**
-     * Get domains belonging to a client
+     * Get client domains
      */
     public function getClientDomains($clientId) {
         try {
-            $domains = Capsule::table('mod_cloudflaremanager_domains')
+            return Capsule::table('mod_cloudflaremanager_domains')
                 ->where('client_id', $clientId)
                 ->get();
-            
-            return $domains;
         } catch (Exception $e) {
             if ($this->debug) {
                 error_log("DomainManager Error (getClientDomains): " . $e->getMessage());
             }
-            throw new Exception(isset($this->lang['error_fetching_client_domains']) ? $this->lang['error_fetching_client_domains'] . ': ' . $e->getMessage() : 'Error fetching client domains: ' . $e->getMessage());
+            throw new Exception(
+                isset($this->lang['error_fetching_client_domains']) ? 
+                    $this->lang['error_fetching_client_domains'] . ': ' . $e->getMessage() : 
+                    'Error fetching client domains: ' . $e->getMessage()
+            );
         }
     }
     
     /**
-     * Sync domain information - optimized
+     * Sync all domains from Cloudflare
      */
     public function syncDomains() {
         try {
@@ -125,38 +132,68 @@ class DomainManager {
                 throw new Exception("API not initialized");
             }
             
-            // Get all zones - page size 50 (faster)
-            $zones = $this->api->listZones(1, 50);
             $syncCount = 0;
             $errors = [];
+            $page = 1;
+            $perPage = 50;
             
-            // For bulk operations
-            $now = date('Y-m-d H:i:s');
-            $processedZoneIds = [];
-            
-            foreach ($zones as $zone) {
+            // Fetch all zones with pagination
+            $hasMorePages = true;
+            while ($hasMorePages) {
                 try {
-                    $result = $this->syncSingleDomain($zone);
-                    if ($result) {
-                        $processedZoneIds[] = $zone['id'];
-                        $syncCount++;
+                    $zones = $this->api->listZones($page, $perPage);
+                    
+                    if ($this->debug) {
+                        error_log("Fetched zones page {$page}: " . count($zones) . " zones");
+                    }
+                    
+                    if (!is_array($zones) || empty($zones)) {
+                        $hasMorePages = false;
+                        break;
+                    }
+                    
+                    foreach ($zones as $zone) {
+                        try {
+                            if (!isset($zone['id']) || !isset($zone['name'])) {
+                                if ($this->debug) {
+                                    error_log("Invalid zone data: " . json_encode($zone));
+                                }
+                                continue;
+                            }
+                            
+                            if ($this->syncSingleDomain($zone)) {
+                                $syncCount++;
+                            }
+                        } catch (Exception $e) {
+                            $errors[] = (isset($zone['name']) ? $zone['name'] : 'Unknown') . ': ' . $e->getMessage();
+                            if ($this->debug) {
+                                error_log("Error syncing domain {$zone['name']}: " . $e->getMessage());
+                            }
+                        }
+                    }
+                    
+                    // Check if there are more pages
+                    if (count($zones) < $perPage) {
+                        $hasMorePages = false;
+                    } else {
+                        $page++;
                     }
                 } catch (Exception $e) {
-                    $errors[] = $zone['name'] . ': ' . $e->getMessage();
                     if ($this->debug) {
-                        error_log("Error syncing domain {$zone['name']}: " . $e->getMessage());
+                        error_log("Error fetching zones page {$page}: " . $e->getMessage());
                     }
+                    $hasMorePages = false;
+                    break;
                 }
-            }
-            
-            if (count($errors) > 0 && $this->debug) {
-                error_log("Sync errors: " . implode(', ', $errors));
             }
             
             return [
                 'success' => true,
                 'count' => $syncCount,
-                'message' => isset($this->lang['sync_completed']) ? sprintf($this->lang['sync_completed'], $syncCount) : sprintf('%s domains synchronized successfully.', $syncCount)
+                'errors' => $errors,
+                'message' => isset($this->lang['sync_completed']) ? 
+                    sprintf($this->lang['sync_completed'], $syncCount) : 
+                    sprintf('%s domains synchronized successfully.', $syncCount)
             ];
         } catch (Exception $e) {
             if ($this->debug) {
@@ -165,13 +202,15 @@ class DomainManager {
             return [
                 'success' => false,
                 'count' => 0,
-                'message' => (isset($this->lang['sync_error']) ? $this->lang['sync_error'] : 'Error during domain synchronization') . ': ' . $e->getMessage()
+                'message' => (isset($this->lang['sync_error']) ? 
+                    $this->lang['sync_error'] : 
+                    'Error during domain synchronization') . ': ' . $e->getMessage()
             ];
         }
     }
     
     /**
-     * Sync a single domain - optimized and fixed
+     * Sync single domain
      */
     public function syncSingleDomain($zone) {
         try {
@@ -179,54 +218,80 @@ class DomainManager {
                 throw new Exception("Invalid zone data");
             }
             
-            // Fix for status display - normalize status values
             $zoneStatus = isset($zone['status']) ? strtolower($zone['status']) : 'active';
             
             // Check if domain exists in database
             $existingDomain = Capsule::table('mod_cloudflaremanager_domains')
                 ->where('zone_id', $zone['id'])
                 ->first();
+            
+            // Get WHMCS domain info - try different column structures
+            $clientId = 0;
+            $registrarName = 'Cloudflare';
+            $expiryDate = null;
+            
+            try {
+                // Try with registrar column directly (standard WHMCS structure)
+                $whmcsDomainInfo = Capsule::table('tbldomains')
+                    ->where('domain', $zone['name'])
+                    ->select('userid', 'expirydate', 'registrar')
+                    ->first();
                 
-            // Check if domain exists in WHMCS (combine in one SQL query)
-            $whmcsDomainInfo = Capsule::table('tbldomains')
-                ->leftJoin('tblregistrars', 'tbldomains.registrarid', '=', 'tblregistrars.id')
-                ->where('tbldomains.domain', $zone['name'])
-                ->select('tbldomains.userid', 'tbldomains.expirydate', 'tblregistrars.registrar')
-                ->first();
-            
-            $clientId = $whmcsDomainInfo ? $whmcsDomainInfo->userid : 0;
-            $registrarName = $whmcsDomainInfo ? $whmcsDomainInfo->registrar : 'Cloudflare';
-            $expiryDate = $whmcsDomainInfo ? $whmcsDomainInfo->expirydate : null;
-            
-            $now = date('Y-m-d H:i:s');
-            
-            // Prepare settings JSON with normalized structure
-            $settings = [
-                'name_servers' => isset($zone['name_servers']) ? $zone['name_servers'] : [],
-                'original_registrar' => isset($zone['original_registrar']) ? $zone['original_registrar'] : '',
-                'original_dnshost' => isset($zone['original_dnshost']) ? $zone['original_dnshost'] : '',
-                'ssl' => [
-                    'status' => 'active' // Default to active unless proven otherwise
-                ],
-                'plan' => isset($zone['plan']) ? $zone['plan'] : ['name' => 'Free']
-            ];
-            
-            // Fetch SSL status if possible
-            if ($this->api) {
+                if ($whmcsDomainInfo) {
+                    $clientId = $whmcsDomainInfo->userid ?? 0;
+                    $registrarName = $whmcsDomainInfo->registrar ?? 'Cloudflare';
+                    $expiryDate = $whmcsDomainInfo->expirydate ?? null;
+                }
+            } catch (Exception $e) {
+                // If registrar column doesn't exist, try without it
+                if ($this->debug) {
+                    error_log("Error fetching WHMCS domain info (trying alternative): " . $e->getMessage());
+                }
+                
                 try {
-                    $sslStatus = $this->api->getSSLStatus($zone['id']);
-                    if (isset($sslStatus['status']) && strtolower($sslStatus['status']) !== 'active') {
-                        $settings['ssl']['status'] = strtolower($sslStatus['status']);
+                    $whmcsDomainInfo = Capsule::table('tbldomains')
+                        ->where('domain', $zone['name'])
+                        ->select('userid', 'expirydate')
+                        ->first();
+                    
+                    if ($whmcsDomainInfo) {
+                        $clientId = $whmcsDomainInfo->userid ?? 0;
+                        $expiryDate = $whmcsDomainInfo->expirydate ?? null;
                     }
-                } catch (Exception $e) {
-                    // SSL error shouldn't stop the overall process
+                } catch (Exception $e2) {
+                    // If tbldomains table doesn't exist or domain not found, continue with defaults
                     if ($this->debug) {
-                        error_log("SSL Status Error for {$zone['name']}: " . $e->getMessage());
+                        error_log("Domain not found in WHMCS: " . $zone['name']);
                     }
                 }
             }
             
-            // Add basic zone data
+            $now = date('Y-m-d H:i:s');
+            
+            // Prepare settings
+            $settings = [
+                'name_servers' => isset($zone['name_servers']) ? $zone['name_servers'] : [],
+                'original_registrar' => isset($zone['original_registrar']) ? $zone['original_registrar'] : '',
+                'original_dnshost' => isset($zone['original_dnshost']) ? $zone['original_dnshost'] : '',
+                'ssl' => ['status' => 'active'],
+                'plan' => isset($zone['plan']) ? $zone['plan'] : ['name' => 'Free']
+            ];
+            
+            // Get SSL status
+            if ($this->api) {
+                try {
+                    $sslStatus = $this->api->getSSLStatus($zone['id']);
+                    if (isset($sslStatus['status'])) {
+                        $settings['ssl']['status'] = strtolower($sslStatus['status']);
+                    }
+                } catch (Exception $e) {
+                    if ($this->debug) {
+                        error_log("SSL Status Error: " . $e->getMessage());
+                    }
+                }
+            }
+            
+            // Prepare domain data
             $domainData = [
                 'domain' => $zone['name'],
                 'zone_id' => $zone['id'],
@@ -238,38 +303,26 @@ class DomainManager {
                 'settings' => json_encode($settings)
             ];
             
-            // Domain creation date
             if (isset($zone['created_on'])) {
                 $domainData['created_at'] = date('Y-m-d H:i:s', strtotime($zone['created_on']));
             } else {
                 $domainData['created_at'] = $now;
             }
             
-            // Determine operation type
             if ($existingDomain) {
-                // Preserve existing analytics
-                $existingAnalytics = $existingDomain->analytics;
-                
-                if ($existingAnalytics) {
-                    $domainData['analytics'] = $existingAnalytics;
+                // Preserve analytics
+                if ($existingDomain->analytics) {
+                    $domainData['analytics'] = $existingDomain->analytics;
                 }
                 
-                // Update domain
                 Capsule::table('mod_cloudflaremanager_domains')
                     ->where('zone_id', $zone['id'])
                     ->update($domainData);
-                    
-                // Get domain ID
+                
                 $domainId = $existingDomain->id;
             } else {
-                // Add new domain
                 $domainId = Capsule::table('mod_cloudflaremanager_domains')
                     ->insertGetId($domainData);
-            }
-            
-            // Sync DNS records if API is available
-            if ($this->api && $domainId) {
-                $this->syncDNSRecords($zone['id'], $domainId);
             }
             
             return true;
@@ -277,88 +330,26 @@ class DomainManager {
             if ($this->debug) {
                 error_log("DomainManager Error (syncSingleDomain): " . $e->getMessage());
             }
-            throw $e; // Re-throw for proper error handling
+            throw $e;
         }
     }
     
     /**
-     * Sync DNS records - optimized
+     * Purge cache for zone
      */
-    public function syncDNSRecords($zoneId, $domainId) {
+    public function purgeCache($zoneId, $purgeEverything = true, $files = [], $tags = [], $hosts = []) {
         try {
             if (!$this->api) {
                 throw new Exception("API not initialized");
             }
             
-            // Get DNS records (limit 100)
-            $dnsRecords = $this->api->listDnsRecords($zoneId, 1, 100);
-            $now = date('Y-m-d H:i:s');
-            
-            // Use transaction for bulk operations
-            Capsule::connection()->transaction(function () use ($domainId, $dnsRecords, $now) {
-                // First clear all DNS records for this domain
-                Capsule::table('mod_cloudflaremanager_dns_records')
-                    ->where('domain_id', $domainId)
-                    ->delete();
-                
-                // Prepare new DNS records
-                $insertData = [];
-                foreach ($dnsRecords as $record) {
-                    $recordData = [
-                        'domain_id' => $domainId,
-                        'record_id' => $record['id'],
-                        'type' => $record['type'],
-                        'name' => $record['name'],
-                        'content' => $record['content'],
-                        'ttl' => $record['ttl'],
-                        'proxied' => $record['proxied'] ? 1 : 0,
-                        'created_at' => $now,
-                        'updated_at' => $now,
-                    ];
-                    
-                    // Add priority for MX and SRV records
-                    if (isset($record['priority'])) {
-                        $recordData['priority'] = $record['priority'];
-                    }
-                    
-                    $insertData[] = $recordData;
-                }
-                
-                // Bulk insert (faster)
-                if (!empty($insertData)) {
-                    Capsule::table('mod_cloudflaremanager_dns_records')
-                        ->insert($insertData);
-                }
-            });
-            
-            return true;
-        } catch (Exception $e) {
-            if ($this->debug) {
-                error_log("DomainManager Error (syncDNSRecords): " . $e->getMessage());
-            }
-            throw $e; // Re-throw for proper error handling
-        }
-    }
-    
-    /**
-     * Purge cache
-     */
-    public function purgeCache($zoneId) {
-        try {
-            if (!$this->api) {
-                throw new Exception("API not initialized");
-            }
-            
-            $result = $this->api->purgeCache($zoneId);
-            
-            // Verify result contains expected structure
-            if (!$result || (is_array($result) && !isset($result['id']))) {
-                throw new Exception("Unexpected response from Cloudflare API");
-            }
+            $result = $this->api->purgeCache($zoneId, $purgeEverything, $files, $tags, $hosts);
             
             return [
                 'success' => true,
-                'message' => isset($this->lang['cache_purged']) ? $this->lang['cache_purged'] : 'Cache purged successfully.'
+                'message' => isset($this->lang['cache_purged']) ? 
+                    $this->lang['cache_purged'] : 
+                    'Cache purged successfully.'
             ];
         } catch (Exception $e) {
             if ($this->debug) {
@@ -366,13 +357,15 @@ class DomainManager {
             }
             return [
                 'success' => false,
-                'message' => (isset($this->lang['cache_purge_error']) ? $this->lang['cache_purge_error'] : 'Error purging cache') . ': ' . $e->getMessage()
+                'message' => (isset($this->lang['cache_purge_error']) ? 
+                    $this->lang['cache_purge_error'] : 
+                    'Error purging cache') . ': ' . $e->getMessage()
             ];
         }
     }
     
     /**
-     * Update domain analytics data - improved version
+     * Update domain analytics
      */
     public function updateAnalytics($zoneId) {
         try {
@@ -380,68 +373,30 @@ class DomainManager {
                 throw new Exception("API not initialized");
             }
             
-            $now = date('Y-m-d H:i:s');
-            
-            // Get current domain
             $domain = Capsule::table('mod_cloudflaremanager_domains')
                 ->where('zone_id', $zoneId)
                 ->first();
-                
+            
             if (!$domain) {
                 throw new Exception('Domain not found');
             }
             
-            // Check existing analytics data (no need to update too frequently)
+            // Check if analytics was updated recently (within 15 minutes)
             $existingAnalytics = $domain->analytics ? json_decode($domain->analytics, true) : null;
-            $lastUpdateTime = null;
-            
             if ($existingAnalytics && isset($existingAnalytics['last_updated'])) {
                 $lastUpdateTime = strtotime($existingAnalytics['last_updated']);
-            }
-            
-            // If updated in the last 15 minutes, don't call again (performance)
-            $fifteenMinutesAgo = time() - 900; // 15 minutes
-            if ($lastUpdateTime && $lastUpdateTime > $fifteenMinutesAgo) {
-                return true; // Already up to date
-            }
-            
-            // Get analytics data - try different methods
-            $analytics = $this->api->getAnalytics($zoneId);
-            
-            // If data is empty, try alternative API call
-            if (empty($analytics) || !isset($analytics['totals']) || empty($analytics['totals'])) {
-                // Get zone details
-                $zoneDetails = $this->api->getZone($zoneId);
-                
-                if (isset($zoneDetails['account']) && isset($zoneDetails['account']['id'])) {
-                    $accountId = $zoneDetails['account']['id'];
-                    
-                    // Try account-level analytics
-                    $accountAnalytics = $this->api->getAccountAnalytics($accountId);
-                    
-                    if (!empty($accountAnalytics) && isset($accountAnalytics['totals'])) {
-                        $analytics = $accountAnalytics;
-                    }
-                }
-                
-                // Try alternative zone analytics endpoint
-                if (empty($analytics) || !isset($analytics['totals']) || empty($analytics['totals'])) {
-                    $zoneAnalytics = $this->api->getZoneAnalytics($zoneId);
-                    
-                    if (!empty($zoneAnalytics) && isset($zoneAnalytics['totals'])) {
-                        $analytics = $zoneAnalytics;
-                    }
+                if ($lastUpdateTime > (time() - 900)) { // 15 minutes
+                    return true; // Already up to date
                 }
             }
             
-            // Get security threats
-            $securityInsights = $this->api->getSecurityInsights($zoneId);
+            // Get analytics data
+            $analytics = $this->api->getZoneAnalytics($zoneId);
             
-            // Combine all data
+            // Prepare analytics data
             $analyticsData = [
-                'analytics' => $analytics,
-                'security' => $securityInsights,
-                'last_updated' => $now
+                'analytics' => $analytics ?: ['totals' => []],
+                'last_updated' => date('Y-m-d H:i:s')
             ];
             
             // Update database
@@ -449,7 +404,7 @@ class DomainManager {
                 ->where('zone_id', $zoneId)
                 ->update([
                     'analytics' => json_encode($analyticsData),
-                    'updated_at' => $now
+                    'updated_at' => date('Y-m-d H:i:s')
                 ]);
             
             return true;
@@ -457,47 +412,12 @@ class DomainManager {
             if ($this->debug) {
                 error_log("DomainManager Error (updateAnalytics): " . $e->getMessage());
             }
-            
-            // Even in case of error, update with default data
-            try {
-                $analyticsData = [
-                    'analytics' => [
-                        'totals' => [
-                            'visits' => 100,
-                            'pageviews' => 250,
-                            'requests' => 500,
-                            'bandwidth' => 1024000
-                        ]
-                    ],
-                    'security' => [
-                        'totals' => [
-                            'bot_management' => 5,
-                            'firewall' => 10,
-                            'rate_limiting' => 3,
-                            'waf' => 7
-                        ]
-                    ],
-                    'last_updated' => date('Y-m-d H:i:s')
-                ];
-                
-                Capsule::table('mod_cloudflaremanager_domains')
-                    ->where('zone_id', $zoneId)
-                    ->update([
-                        'analytics' => json_encode($analyticsData),
-                        'updated_at' => date('Y-m-d H:i:s')
-                    ]);
-            } catch (Exception $innerException) {
-                if ($this->debug) {
-                    error_log("DomainManager Error (updateAnalytics - fallback): " . $innerException->getMessage());
-                }
-            }
-            
             return false;
         }
     }
     
     /**
-     * Get full details for a specific domain
+     * Get domain details
      */
     public function getDomainDetails($domainId) {
         try {
@@ -505,55 +425,45 @@ class DomainManager {
                 throw new Exception("API not initialized");
             }
             
-            // Get domain information
             $domain = Capsule::table('mod_cloudflaremanager_domains')
                 ->where('id', $domainId)
                 ->first();
-                
+            
             if (!$domain) {
-                throw new Exception(isset($this->lang['domain_not_found']) ? $this->lang['domain_not_found'] : 'Domain not found');
+                throw new Exception(
+                    isset($this->lang['domain_not_found']) ? 
+                        $this->lang['domain_not_found'] : 
+                        'Domain not found'
+                );
             }
             
             // Get zone details
             $zoneDetails = $this->api->getZone($domain->zone_id);
             
-            // Update analytics data
+            // Update analytics
             $this->updateAnalytics($domain->zone_id);
             
-            // Get updated domain information
+            // Get updated domain
             $updatedDomain = Capsule::table('mod_cloudflaremanager_domains')
                 ->where('id', $domainId)
                 ->first();
-                
-            // Combined data
-            $data = [
+            
+            return [
                 'domain' => $updatedDomain,
                 'zone_details' => $zoneDetails,
                 'analytics' => $updatedDomain->analytics ? json_decode($updatedDomain->analytics, true) : null,
                 'settings' => $updatedDomain->settings ? json_decode($updatedDomain->settings, true) : null
             ];
-            
-            return $data;
         } catch (Exception $e) {
             if ($this->debug) {
                 error_log("DomainManager Error (getDomainDetails): " . $e->getMessage());
             }
-            throw new Exception(isset($this->lang['error_fetching_details']) ? $this->lang['error_fetching_details'] : 'Error fetching domain details');
+            throw new Exception(
+                isset($this->lang['error_fetching_details']) ? 
+                    $this->lang['error_fetching_details'] : 
+                    'Error fetching domain details'
+            );
         }
     }
-    
-    /**
-     * Format bytes to human readable format
-     */
-    public function formatBytes($bytes, $precision = 2) {
-        $units = ['B', 'KB', 'MB', 'GB', 'TB'];
-        
-        $bytes = max($bytes, 0);
-        $pow = floor(($bytes ? log($bytes) : 0) / log(1024));
-        $pow = min($pow, count($units) - 1);
-        
-        $bytes /= pow(1024, $pow);
-        
-        return round($bytes, $precision) . ' ' . $units[$pow];
-    }
+}
 }

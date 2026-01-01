@@ -1,11 +1,11 @@
 <?php
 /**
- * Cloudflare API Integration Class - Token focused improved version
+ * Cloudflare API Client - Professional Implementation
  *
  * @package     CloudflareManager
  * @author      Ali Çömez / Slaweally
  * @copyright   Copyright (c) 2025, Megabre.com
- * @version     1.0.4
+ * @version     2.0.0
  */
 
 namespace CloudflareManager;
@@ -13,33 +13,38 @@ namespace CloudflareManager;
 use Exception;
 use WHMCS\Database\Capsule;
 
+if (!class_exists('CloudflareManager\CloudflareAPI')) {
 class CloudflareAPI {
-    protected $apiUrl = "https://api.cloudflare.com/client/v4/";
+    const API_BASE_URL = "https://api.cloudflare.com/client/v4/";
+    const DEFAULT_TIMEOUT = 30;
+    const DEFAULT_CONNECT_TIMEOUT = 10;
+    
     protected $email;
     protected $apiKey;
     protected $useCache = true;
-    protected $cacheExpiry = 300; // 5 minutes cache duration
+    protected $cacheExpiry = 300;
     protected $debug = false;
-    protected $lastErrorMessage = '';
+    protected $lastError = null;
     
     /**
-     * Constructor - prioritizes API token usage
+     * Constructor
      */
     public function __construct($email, $apiKey, $cacheSettings = []) {
-        $this->email = $email;
-        $this->apiKey = $apiKey;
+        $this->email = trim($email);
+        $this->apiKey = trim($apiKey);
         
-        // Get cache settings
         if (isset($cacheSettings['use_cache'])) {
-            $this->useCache = ($cacheSettings['use_cache'] == 'on' || $cacheSettings['use_cache'] == 'yes' || $cacheSettings['use_cache'] == '1');
+            $this->useCache = ($cacheSettings['use_cache'] == 'on' || 
+                              $cacheSettings['use_cache'] == 'yes' || 
+                              $cacheSettings['use_cache'] == '1');
         }
         
         if (isset($cacheSettings['cache_expiry']) && intval($cacheSettings['cache_expiry']) >= 60) {
             $this->cacheExpiry = intval($cacheSettings['cache_expiry']);
         }
-
-        if ($this->debug) {
-            $this->logDebug('CloudflareAPI initialized with ' . (empty($this->email) ? 'API Token' : 'Global API Key'));
+        
+        if (empty($this->apiKey)) {
+            throw new Exception("API key is required");
         }
     }
     
@@ -50,97 +55,62 @@ class CloudflareAPI {
         $this->debug = true;
         return $this;
     }
-
-    /**
-     * Debug log
-     */
-    protected function logDebug($message) {
-        if ($this->debug) {
-            error_log('[CloudflareManager Debug] ' . $message);
-        }
-    }
     
     /**
-     * Disable cache
-     */
-    public function disableCache() {
-        $this->useCache = false;
-        return $this;
-    }
-    
-    /**
-     * Get last error message
+     * Get last error
      */
     public function getLastError() {
-        return $this->lastErrorMessage;
+        return $this->lastError;
     }
     
     /**
-     * Send API request - optimized for token usage
+     * Make API request
      */
-    protected function request($endpoint, $method = "GET", $data = []) {
-        $startTime = microtime(true);
+    public function request($endpoint, $method = "GET", $data = []) {
         $cacheEnabled = ($method === "GET" && $this->useCache);
         
         // Check cache for GET requests
         if ($cacheEnabled) {
             $cacheKey = md5($endpoint . json_encode($data));
-            $cachedData = $this->getCache($cacheKey);
-            
-            if ($cachedData !== null) {
-                $this->logDebug("CACHE HIT - {$endpoint}");
-                return $cachedData;
+            $cached = $this->getCache($cacheKey);
+            if ($cached !== null) {
+                $this->logDebug("Cache HIT: {$endpoint}");
+                return $cached;
             }
         }
         
-        $url = $this->apiUrl . $endpoint;
+        $url = self::API_BASE_URL . ltrim($endpoint, '/');
         $this->logDebug("API Request: {$method} {$url}");
         
-        // Initialize and optimize CURL
         $ch = curl_init();
         curl_setopt_array($ch, [
             CURLOPT_URL => $url,
             CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_TIMEOUT => 20,
-            CURLOPT_CONNECTTIMEOUT => 5,
+            CURLOPT_TIMEOUT => self::DEFAULT_TIMEOUT,
+            CURLOPT_CONNECTTIMEOUT => self::DEFAULT_CONNECT_TIMEOUT,
             CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
-            CURLOPT_ENCODING => "", // Accept automatic gzip
             CURLOPT_SSL_VERIFYPEER => true,
             CURLOPT_FOLLOWLOCATION => true,
             CURLOPT_MAXREDIRS => 3,
         ]);
         
-        // Prioritize API Token usage
+        // Set authentication headers
+        $headers = ["Content-Type: application/json"];
         if (empty($this->email)) {
-            // API Token method (recommended)
-            $authHeader = "Bearer " . $this->apiKey;
-            $headers = [
-                "Authorization: " . $authHeader,
-                "Content-Type: application/json"
-            ];
+            // API Token authentication
+            $headers[] = "Authorization: Bearer " . $this->apiKey;
             $this->logDebug("Using API Token authentication");
         } else {
-            // Global API Key method (legacy)
-            $headers = [
-                "X-Auth-Email: " . $this->email,
-                "X-Auth-Key: " . $this->apiKey,
-                "Content-Type: application/json"
-            ];
+            // Global API Key authentication
+            $headers[] = "X-Auth-Email: " . $this->email;
+            $headers[] = "X-Auth-Key: " . $this->apiKey;
             $this->logDebug("Using Global API Key authentication");
         }
-        
         curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
         
-        // CURL verbose mode (for debugging)
-        if ($this->debug) {
-            curl_setopt($ch, CURLOPT_VERBOSE, true);
-            $verbose = fopen('php://temp', 'w+');
-            curl_setopt($ch, CURLOPT_STDERR, $verbose);
-        }
-        
-        // Set HTTP method
-        if ($method === "POST" || $method === "PUT" || $method === "PATCH") {
-            if ($method === "POST") {
+        // Set request method and data
+        if (in_array($method, ['POST', 'PUT', 'PATCH'])) {
+            if ($method === 'POST') {
                 curl_setopt($ch, CURLOPT_POST, true);
             } else {
                 curl_setopt($ch, CURLOPT_CUSTOMREQUEST, $method);
@@ -151,91 +121,70 @@ class CloudflareAPI {
                 curl_setopt($ch, CURLOPT_POSTFIELDS, $jsonData);
                 $this->logDebug("Request Body: " . $jsonData);
             }
-        } elseif ($method === "DELETE") {
-            curl_setopt($ch, CURLOPT_CUSTOMREQUEST, "DELETE");
+        } elseif ($method === 'DELETE') {
+            curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'DELETE');
         }
         
-        // Send request and measure
-        $requestStartTime = microtime(true);
+        // Execute request
         $response = curl_exec($ch);
-        $requestEndTime = microtime(true);
-        $requestTime = round(($requestEndTime - $requestStartTime) * 1000, 2);
-        
-        // Get CURL info
-        $error = curl_error($ch);
         $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        $contentType = curl_getinfo($ch, CURLINFO_CONTENT_TYPE);
-        
-        // Verbose log
-        if ($this->debug) {
-            rewind($verbose);
-            $verboseLog = stream_get_contents($verbose);
-            $this->logDebug("HTTP Request: {$method} {$endpoint} (HTTP {$httpCode}) - {$requestTime}ms");
-            
-            if (!empty($verboseLog)) {
-                $this->logDebug("CURL Verbose: " . $verboseLog);
-            }
-        }
-        
+        $error = curl_error($ch);
         curl_close($ch);
         
-        // CURL error check
+        // Handle cURL errors
         if ($error) {
-            $errorMsg = "cURL Error: " . $error;
-            $this->lastErrorMessage = $errorMsg;
-            $this->logDebug("CURL ERROR: " . $errorMsg);
-            throw new Exception($errorMsg);
+            $this->lastError = "cURL Error: " . $error;
+            throw new Exception($this->lastError);
         }
         
-        // API Response
-        $this->logDebug("API Response: " . substr($response, 0, 500) . (strlen($response) > 500 ? '...' : ''));
+        // Parse response
+        $responseData = json_decode($response, true);
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            $this->lastError = "JSON decode error: " . json_last_error_msg();
+            $this->logDebug("Raw response: " . substr($response, 0, 500));
+            throw new Exception($this->lastError);
+        }
         
-        // JSON response check
-        if (strpos($contentType, 'application/json') !== false || empty($contentType)) {
-            $responseData = json_decode($response, true);
-            
-            // JSON decode error
-            if (json_last_error() !== JSON_ERROR_NONE) {
-                $jsonError = "JSON decode error: " . json_last_error_msg();
-                $this->lastErrorMessage = $jsonError;
-                $this->logDebug("JSON ERROR: " . $jsonError);
-                throw new Exception($jsonError);
-            }
-        } else {
-            $responseData = [
-                'success' => ($httpCode >= 200 && $httpCode < 300),
-                'result' => $response
-            ];
+        // Log full response in debug mode
+        if ($this->debug) {
+            $this->logDebug("API Response (HTTP {$httpCode}): " . json_encode($responseData));
         }
         
         // Check API response
         if (!isset($responseData["success"]) || $responseData["success"] !== true) {
             $errorMessages = [];
-            
             if (isset($responseData["errors"]) && is_array($responseData["errors"])) {
                 foreach ($responseData["errors"] as $error) {
-                    $errorDetail = isset($error["message"]) ? $error["message"] : "Unknown error";
-                    $errorCode = isset($error["code"]) ? " (Code: " . $error["code"] . ")" : "";
-                    $errorMessages[] = $errorDetail . $errorCode;
+                    $msg = isset($error["message"]) ? $error["message"] : "Unknown error";
+                    $code = isset($error["code"]) ? " (Code: {$error["code"]})" : "";
+                    $errorMessages[] = $msg . $code;
                 }
+            } else {
+                $errorMessages[] = "API returned success=false but no error details";
             }
-            
-            $errorMessage = "Cloudflare API Error" . (count($errorMessages) ? ": " . implode(", ", $errorMessages) : "");
-            $this->lastErrorMessage = $errorMessage;
-            $this->logDebug("API ERROR: " . $errorMessage);
-            throw new Exception($errorMessage);
+            $this->lastError = "Cloudflare API Error: " . implode(", ", $errorMessages);
+            $this->logDebug("API Error Response: " . json_encode($responseData));
+            throw new Exception($this->lastError);
         }
         
-        // Cache the result (for GET requests only)
-        if ($cacheEnabled && isset($responseData["result"])) {
-            $this->setCache($cacheKey, $responseData["result"]);
+        // Extract result - Cloudflare API always returns result in "result" field
+        $result = isset($responseData["result"]) ? $responseData["result"] : null;
+        
+        // Log result info if available
+        if (isset($responseData["result_info"]) && $this->debug) {
+            $this->logDebug("Result Info: " . json_encode($responseData["result_info"]));
         }
         
-        return $responseData["result"];
+        // Cache result for GET requests
+        if ($cacheEnabled && $result !== null) {
+            $this->setCache($cacheKey, $result);
+        }
+        
+        return $result;
     }
     
     /**
-     * Get data from cache
+     * Get cache
      */
     protected function getCache($key) {
         try {
@@ -250,25 +199,22 @@ class CloudflareAPI {
         } catch (Exception $e) {
             $this->logDebug("Cache Error: " . $e->getMessage());
         }
-        
         return null;
     }
     
     /**
-     * Store data in cache
+     * Set cache
      */
     protected function setCache($key, $value) {
         try {
             $now = date('Y-m-d H:i:s');
             $expiry = date('Y-m-d H:i:s', time() + $this->cacheExpiry);
             
-            // Check if entry exists
             $exists = Capsule::table('mod_cloudflaremanager_cache')
                 ->where('cache_key', $key)
                 ->exists();
-                
+            
             if ($exists) {
-                // Update existing
                 Capsule::table('mod_cloudflaremanager_cache')
                     ->where('cache_key', $key)
                     ->update([
@@ -277,15 +223,13 @@ class CloudflareAPI {
                         'updated_at' => $now
                     ]);
             } else {
-                // Insert new
-                Capsule::table('mod_cloudflaremanager_cache')
-                    ->insert([
-                        'cache_key' => $key,
-                        'cache_value' => json_encode($value),
-                        'expires_at' => $expiry,
-                        'created_at' => $now,
-                        'updated_at' => $now
-                    ]);
+                Capsule::table('mod_cloudflaremanager_cache')->insert([
+                    'cache_key' => $key,
+                    'cache_value' => json_encode($value),
+                    'expires_at' => $expiry,
+                    'created_at' => $now,
+                    'updated_at' => $now
+                ]);
             }
         } catch (Exception $e) {
             $this->logDebug("Cache Save Error: " . $e->getMessage());
@@ -293,15 +237,13 @@ class CloudflareAPI {
     }
     
     /**
-     * Clear cache for a specific zone
+     * Clear cache for zone
      */
     public function clearCacheForZone($zoneId) {
         try {
             Capsule::table('mod_cloudflaremanager_cache')
                 ->where('cache_key', 'LIKE', '%' . $zoneId . '%')
                 ->delete();
-            
-            $this->logDebug("Cache cleared for zone {$zoneId}");
             return true;
         } catch (Exception $e) {
             $this->logDebug("Cache Clear Error: " . $e->getMessage());
@@ -315,7 +257,6 @@ class CloudflareAPI {
     public function clearAllCache() {
         try {
             Capsule::table('mod_cloudflaremanager_cache')->truncate();
-            $this->logDebug("All cache cleared");
             return true;
         } catch (Exception $e) {
             $this->logDebug("All Cache Clear Error: " . $e->getMessage());
@@ -324,31 +265,53 @@ class CloudflareAPI {
     }
     
     /**
-     * Test connection
+     * Test API connection
      */
     public function testConnection() {
         try {
-            // If using API Token, use the verify endpoint directly
             if (empty($this->email)) {
-                $result = $this->request("user/tokens/verify");
-                return true;
+                // API Token verification
+                $this->request("user/tokens/verify");
             } else {
-                // For Global API Key, get user info
-                $result = $this->request("user");
-                return true;
+                // Global API Key - get user info
+                $this->request("user");
             }
+            return true;
         } catch (Exception $e) {
-            $this->logDebug("Connection Test Error: " . $e->getMessage());
-            throw $e;
+            throw new Exception("Connection test failed: " . $e->getMessage());
         }
     }
     
     /**
-     * List all zones
+     * List all zones (domains)
+     * Cloudflare API returns: {"success": true, "result": [...zones...], "result_info": {...}}
      */
     public function listZones($page = 1, $perPage = 50, $direction = 'desc', $order = 'name') {
-        $params = "page={$page}&per_page={$perPage}&direction={$direction}&order={$order}";
-        return $this->request("zones?{$params}");
+        try {
+            $params = http_build_query([
+                'page' => $page,
+                'per_page' => $perPage,
+                'direction' => $direction,
+                'order' => $order
+            ]);
+            
+            $this->logDebug("Fetching zones page {$page} with per_page {$perPage}");
+            $result = $this->request("zones?{$params}");
+            
+            // The request() method already extracts the "result" field from API response
+            // So $result should be an array of zones directly
+            if (is_array($result)) {
+                $this->logDebug("Received " . count($result) . " zones");
+                return $result;
+            }
+            
+            // If result is not an array, log and return empty array
+            $this->logDebug("listZones returned non-array. Type: " . gettype($result) . ", Value: " . json_encode($result));
+            return [];
+        } catch (Exception $e) {
+            $this->logDebug("listZones error: " . $e->getMessage());
+            throw $e;
+        }
     }
     
     /**
@@ -362,29 +325,51 @@ class CloudflareAPI {
      * List DNS records for a zone
      */
     public function listDnsRecords($zoneId, $page = 1, $perPage = 100, $type = '') {
-        $params = "page={$page}&per_page={$perPage}";
+        $params = ['page' => $page, 'per_page' => $perPage];
         if (!empty($type)) {
-            $params .= "&type={$type}";
+            $params['type'] = $type;
         }
-        return $this->request("zones/{$zoneId}/dns_records?{$params}");
+        $queryString = http_build_query($params);
+        return $this->request("zones/{$zoneId}/dns_records?{$queryString}");
+    }
+    
+    /**
+     * Get single DNS record
+     */
+    public function getDnsRecord($zoneId, $recordId) {
+        return $this->request("zones/{$zoneId}/dns_records/{$recordId}");
     }
     
     /**
      * Create DNS record
      */
     public function createDnsRecord($zoneId, $data) {
-        $result = $this->request("zones/{$zoneId}/dns_records", "POST", $data);
-        $this->clearCacheForZone($zoneId);
-        return $result;
+        try {
+            $this->logDebug("Creating DNS record for zone {$zoneId}: " . json_encode($data));
+            $result = $this->request("zones/{$zoneId}/dns_records", "POST", $data);
+            $this->clearCacheForZone($zoneId);
+            $this->logDebug("DNS record created successfully");
+            return $result;
+        } catch (Exception $e) {
+            $this->logDebug("Error creating DNS record: " . $e->getMessage());
+            throw $e;
+        }
     }
     
     /**
      * Update DNS record
      */
     public function updateDnsRecord($zoneId, $recordId, $data) {
-        $result = $this->request("zones/{$zoneId}/dns_records/{$recordId}", "PUT", $data);
-        $this->clearCacheForZone($zoneId);
-        return $result;
+        try {
+            $this->logDebug("Updating DNS record {$recordId} for zone {$zoneId}: " . json_encode($data));
+            $result = $this->request("zones/{$zoneId}/dns_records/{$recordId}", "PUT", $data);
+            $this->clearCacheForZone($zoneId);
+            $this->logDebug("DNS record updated successfully");
+            return $result;
+        } catch (Exception $e) {
+            $this->logDebug("Error updating DNS record: " . $e->getMessage());
+            throw $e;
+        }
     }
     
     /**
@@ -399,57 +384,39 @@ class CloudflareAPI {
     /**
      * Purge zone cache
      */
-    public function purgeCache($zoneId) {
-        $result = $this->request("zones/{$zoneId}/purge_cache", "POST", ["purge_everything" => true]);
+    public function purgeCache($zoneId, $purgeEverything = true, $files = [], $tags = [], $hosts = []) {
+        $data = ['purge_everything' => $purgeEverything];
+        if (!$purgeEverything) {
+            if (!empty($files)) $data['files'] = $files;
+            if (!empty($tags)) $data['tags'] = $tags;
+            if (!empty($hosts)) $data['hosts'] = $hosts;
+        }
+        $result = $this->request("zones/{$zoneId}/purge_cache", "POST", $data);
         $this->clearCacheForZone($zoneId);
         return $result;
     }
     
     /**
-     * Get zone security threats (WAF & Security Analytics)
+     * Get zone analytics
+     * Returns both totals and timeseries data for charts
      */
-    public function getSecurityInsights($zoneId) {
+    public function getZoneAnalytics($zoneId, $since = "-1440") {
         try {
-            // First try to get direct security threats data
-            return $this->request("zones/{$zoneId}/security/threats");
-        } catch (Exception $e) {
-            $this->logDebug("Security Insights Error: " . $e->getMessage());
+            // Get analytics dashboard data (includes totals and timeseries)
+            $result = $this->request("zones/{$zoneId}/analytics/dashboard?since={$since}");
             
-            // Try alternative endpoints
-            try {
-                // Try to get firewall events
-                $firewallEvents = $this->request("zones/{$zoneId}/firewall/events");
-                if (!empty($firewallEvents)) {
-                    return [
-                        'totals' => [
-                            'bot_management' => count(array_filter($firewallEvents, function($event) {
-                                return isset($event['source']) && $event['source'] === 'bot_management';
-                            })),
-                            'firewall' => count(array_filter($firewallEvents, function($event) {
-                                return isset($event['source']) && $event['source'] === 'firewall';
-                            })),
-                            'rate_limiting' => count(array_filter($firewallEvents, function($event) {
-                                return isset($event['source']) && $event['source'] === 'rate_limiting';
-                            })),
-                            'waf' => count(array_filter($firewallEvents, function($event) {
-                                return isset($event['source']) && $event['source'] === 'waf';
-                            }))
-                        ]
-                    ];
-                }
-            } catch (Exception $innerException) {
-                $this->logDebug("Firewall Events Error: " . $innerException->getMessage());
+            // The API returns: { "totals": {...}, "timeseries": [...] }
+            // Ensure we return the full structure
+            if (is_array($result)) {
+                return $result;
             }
             
-            // Return empty structure if all attempts fail
-            return [
-                'totals' => [
-                    'bot_management' => 5,
-                    'firewall' => 10,
-                    'rate_limiting' => 3,
-                    'waf' => 7
-                ]
-            ];
+            // If result is not an array, wrap it
+            return ['totals' => $result, 'timeseries' => []];
+        } catch (Exception $e) {
+            $this->logDebug("Analytics Error: " . $e->getMessage());
+            // Return empty structure instead of null to prevent errors
+            return ['totals' => [], 'timeseries' => []];
         }
     }
     
@@ -461,153 +428,340 @@ class CloudflareAPI {
             return $this->request("zones/{$zoneId}/ssl/verification");
         } catch (Exception $e) {
             $this->logDebug("SSL Status Error: " . $e->getMessage());
-            
-            try {
-                // Try alternative endpoint
-                $settings = $this->request("zones/{$zoneId}/settings/ssl");
-                if (isset($settings['value'])) {
-                    return [
-                        'status' => $settings['value'] === 'off' ? 'inactive' : 'active'
-                    ];
-                }
-            } catch (Exception $innerException) {
-                $this->logDebug("SSL Settings Error: " . $innerException->getMessage());
-            }
-            
-            return [
-                'status' => 'unknown'
-            ];
+            return ['status' => 'unknown'];
         }
     }
     
     /**
-     * Get zone analytics data - improved with multiple fallback methods
+     * Get zone settings
      */
-    public function getAnalytics($zoneId, $since = "-1440") {
+    public function getZoneSettings($zoneId) {
         try {
-            // First try zone-based analytics
-            $result = $this->request("zones/{$zoneId}/analytics/dashboard?since={$since}");
-            
-            // If result is empty or lacking data, try account-based analytics
-            if (empty($result) || !isset($result['totals']) || empty($result['totals'])) {
-                // Try to get analytics via HTTP requests endpoint
-                try {
-                    $httpRequests = $this->request("zones/{$zoneId}/analytics/dashboard");
-                    if (!empty($httpRequests) && isset($httpRequests['totals'])) {
-                        return $httpRequests;
-                    }
-                } catch (Exception $e) {
-                    $this->logDebug("HTTP Requests Analytics Error: " . $e->getMessage());
-                }
-                
-                // Try to get zone details to find account ID
-                $zone = $this->getZone($zoneId);
-                if (isset($zone['account']) && isset($zone['account']['id'])) {
-                    $accountId = $zone['account']['id'];
-                    try {
-                        $accountAnalytics = $this->request("accounts/{$accountId}/analytics/dashboard?since={$since}");
-                        if (!empty($accountAnalytics) && isset($accountAnalytics['totals'])) {
-                            return $accountAnalytics;
-                        }
-                    } catch (Exception $e) {
-                        $this->logDebug("Account Analytics Error: " . $e->getMessage());
-                    }
-                }
-                
-                // If still no data, try alternative endpoints
-                try {
-                    $analyticsData = $this->request("zones/{$zoneId}/analytics");
-                    if (!empty($analyticsData)) {
-                        // Transform to standard format
-                        $transformedData = [
-                            'totals' => [
-                                'visits' => isset($analyticsData['uniques']['all']) ? $analyticsData['uniques']['all'] : 100,
-                                'pageviews' => isset($analyticsData['pageviews']['all']) ? $analyticsData['pageviews']['all'] : 250,
-                                'requests' => isset($analyticsData['requests']['all']) ? $analyticsData['requests']['all'] : 500,
-                                'bandwidth' => isset($analyticsData['bandwidth']['all']) ? $analyticsData['bandwidth']['all'] : 1024000
-                            ]
-                        ];
-                        return $transformedData;
-                    }
-                } catch (Exception $e) {
-                    $this->logDebug("Alternative Analytics Error: " . $e->getMessage());
-                }
+            return $this->request("zones/{$zoneId}/settings");
+        } catch (Exception $e) {
+            $this->logDebug("Get Zone Settings Error: " . $e->getMessage());
+            throw $e;
+        }
+    }
+    
+    /**
+     * Update zone setting
+     * @param string $zoneId Zone ID
+     * @param string $setting Setting name (e.g., 'development_mode', 'security_level')
+     * @param mixed $value Setting value
+     */
+    public function updateZoneSetting($zoneId, $setting, $value) {
+        try {
+            // Format value according to Cloudflare API requirements
+            // Development mode: "on" or "off"
+            if ($setting === 'development_mode') {
+                $formattedValue = ($value === true || $value === 'on' || $value === '1') ? 'on' : 'off';
             } else {
-                // If we have data already, return it
-                return $result;
+                // Other settings use the value as-is
+                $formattedValue = $value;
             }
             
-            // If all attempts fail, return sample data
-            return [
-                'totals' => [
-                    'visits' => 100,
-                    'pageviews' => 250,
-                    'requests' => 500,
-                    'bandwidth' => 1024000
-                ]
-            ];
+            $data = ['value' => $formattedValue];
+            $this->logDebug("Updating zone setting: {$setting} = {$formattedValue} for zone {$zoneId}");
+            $result = $this->request("zones/{$zoneId}/settings/{$setting}", "PATCH", $data);
+            $this->clearCacheForZone($zoneId);
+            $this->logDebug("Zone setting updated successfully");
+            return $result;
         } catch (Exception $e) {
-            $this->logDebug("Analytics Error: " . $e->getMessage());
-            
-            // Return sample data on error
-            return [
-                'totals' => [
-                    'visits' => 100,
-                    'pageviews' => 250,
-                    'requests' => 500,
-                    'bandwidth' => 1024000
-                ]
-            ];
-        }
-    }
-
-    /**
-     * Get WAF settings
-     */
-    public function getWAFSettings($zoneId) {
-        try {
-            return $this->request("zones/{$zoneId}/firewall/waf");
-        } catch (Exception $e) {
-            $this->logDebug("WAF Settings Error: " . $e->getMessage());
-            return [];
+            $this->logDebug("Update Zone Setting Error: " . $e->getMessage());
+            throw $e;
         }
     }
     
     /**
-     * Get account analytics data
+     * Pause Cloudflare for zone
      */
-    public function getAccountAnalytics($accountId, $since = "-1440") {
+    public function pauseZone($zoneId) {
         try {
-            return $this->request("accounts/{$accountId}/analytics/dashboard?since={$since}");
+            $data = ['paused' => true];
+            $result = $this->request("zones/{$zoneId}", "PATCH", $data);
+            $this->clearCacheForZone($zoneId);
+            return $result;
         } catch (Exception $e) {
-            $this->logDebug("Account Analytics Error: " . $e->getMessage());
-            return [
-                'totals' => [
-                    'visits' => 100,
-                    'pageviews' => 250,
-                    'requests' => 500,
-                    'bandwidth' => 1024000
-                ]
-            ];
+            $this->logDebug("Pause Zone Error: " . $e->getMessage());
+            throw $e;
         }
     }
     
     /**
-     * Get zone analytics with alternative method
+     * Unpause Cloudflare for zone
      */
-    public function getZoneAnalytics($zoneId, $since = "-1440") {
+    public function unpauseZone($zoneId) {
         try {
-            return $this->request("zones/{$zoneId}/analytics/dashboard");
+            $data = ['paused' => false];
+            $result = $this->request("zones/{$zoneId}", "PATCH", $data);
+            $this->clearCacheForZone($zoneId);
+            return $result;
         } catch (Exception $e) {
-            $this->logDebug("Zone Analytics Error: " . $e->getMessage());
-            return [
-                'totals' => [
-                    'visits' => 100,
-                    'pageviews' => 250,
-                    'requests' => 500,
-                    'bandwidth' => 1024000
-                ]
-            ];
+            $this->logDebug("Unpause Zone Error: " . $e->getMessage());
+            throw $e;
         }
     }
+    
+    /**
+     * Delete zone (Remove from Cloudflare)
+     */
+    public function deleteZone($zoneId) {
+        try {
+            $result = $this->request("zones/{$zoneId}", "DELETE");
+            $this->clearCacheForZone($zoneId);
+            return $result;
+        } catch (Exception $e) {
+            $this->logDebug("Delete Zone Error: " . $e->getMessage());
+            throw $e;
+        }
+    }
+    
+        /**
+     * Get SSL Universal Settings
+     */
+    public function getSSLUniversalSettings($zoneId) {
+        try {
+            return $this->request("zones/{$zoneId}/ssl/universal/settings");
+        } catch (Exception $e) {
+            $this->logDebug("Get SSL Universal Settings Error: " . $e->getMessage());
+            throw $e;
+        }
+    }
+    
+    /**
+     * Update SSL Universal Settings
+     */
+    public function updateSSLUniversalSettings($zoneId, $data) {
+        try {
+            $result = $this->request("zones/{$zoneId}/ssl/universal/settings", "PATCH", $data);
+            $this->clearCacheForZone($zoneId);
+            return $result;
+        } catch (Exception $e) {
+            $this->logDebug("Update SSL Universal Settings Error: " . $e->getMessage());
+            throw $e;
+        }
+    }
+    
+    /**
+     * List Firewall Rules
+     */
+    public function listFirewallRules($zoneId, $page = 1, $perPage = 100) {
+        try {
+            $params = http_build_query(['page' => $page, 'per_page' => $perPage]);
+            return $this->request("zones/{$zoneId}/firewall/rules?{$params}");
+        } catch (Exception $e) {
+            $this->logDebug("List Firewall Rules Error: " . $e->getMessage());
+            throw $e;
+        }
+    }
+    
+    /**
+     * Create Firewall Rule
+     */
+    public function createFirewallRule($zoneId, $data) {
+        try {
+            $result = $this->request("zones/{$zoneId}/firewall/rules", "POST", $data);
+            $this->clearCacheForZone($zoneId);
+            return $result;
+        } catch (Exception $e) {
+            $this->logDebug("Create Firewall Rule Error: " . $e->getMessage());
+            throw $e;
+        }
+    }
+    
+    /**
+     * Get WAF Packages
+     */
+    public function getWAFPackages($zoneId) {
+        try {
+            return $this->request("zones/{$zoneId}/firewall/waf/packages");
+        } catch (Exception $e) {
+            $this->logDebug("Get WAF Packages Error: " . $e->getMessage());
+            throw $e;
+        }
+    }
+    
+    /**
+     * Get WAF Groups
+     */
+    public function getWAFGroups($zoneId, $packageId) {
+        try {
+            return $this->request("zones/{$zoneId}/firewall/waf/packages/{$packageId}/groups");
+        } catch (Exception $e) {
+            $this->logDebug("Get WAF Groups Error: " . $e->getMessage());
+            throw $e;
+        }
+    }
+    
+    /**
+     * List Page Rules
+     */
+    public function listPageRules($zoneId, $page = 1, $perPage = 100) {
+        try {
+            $params = http_build_query(['page' => $page, 'per_page' => $perPage]);
+            return $this->request("zones/{$zoneId}/pagerules?{$params}");
+        } catch (Exception $e) {
+            $this->logDebug("List Page Rules Error: " . $e->getMessage());
+            throw $e;
+        }
+    }
+    
+    /**
+     * Create Page Rule
+     */
+    public function createPageRule($zoneId, $data) {
+        try {
+            $result = $this->request("zones/{$zoneId}/pagerules", "POST", $data);
+            $this->clearCacheForZone($zoneId);
+            return $result;
+        } catch (Exception $e) {
+            $this->logDebug("Create Page Rule Error: " . $e->getMessage());
+            throw $e;
+        }
+    }
+    
+    /**
+     * List Rate Limits
+     */
+    public function listRateLimits($zoneId, $page = 1, $perPage = 100) {
+        try {
+            $params = http_build_query(['page' => $page, 'per_page' => $perPage]);
+            return $this->request("zones/{$zoneId}/rate_limits?{$params}");
+        } catch (Exception $e) {
+            $this->logDebug("List Rate Limits Error: " . $e->getMessage());
+            throw $e;
+        }
+    }
+    
+    /**
+     * Create Rate Limit
+     */
+    public function createRateLimit($zoneId, $data) {
+        try {
+            $result = $this->request("zones/{$zoneId}/rate_limits", "POST", $data);
+            $this->clearCacheForZone($zoneId);
+            return $result;
+        } catch (Exception $e) {
+            $this->logDebug("Create Rate Limit Error: " . $e->getMessage());
+            throw $e;
+        }
+    }
+    
+    /**
+     * Get Cache Level Setting
+     */
+    public function getCacheLevel($zoneId) {
+        try {
+            return $this->request("zones/{$zoneId}/settings/cache_level");
+        } catch (Exception $e) {
+            $this->logDebug("Get Cache Level Error: " . $e->getMessage());
+            throw $e;
+        }
+    }
+    
+    /**
+     * Get Browser Cache TTL Setting
+     */
+    public function getBrowserCacheTTL($zoneId) {
+        try {
+            return $this->request("zones/{$zoneId}/settings/browser_cache_ttl");
+        } catch (Exception $e) {
+            $this->logDebug("Get Browser Cache TTL Error: " . $e->getMessage());
+            throw $e;
+        }
+    }
+    
+    /**
+     * Get Security Level Setting
+     */
+    public function getSecurityLevel($zoneId) {
+        try {
+            return $this->request("zones/{$zoneId}/settings/security_level");
+        } catch (Exception $e) {
+            $this->logDebug("Get Security Level Error: " . $e->getMessage());
+            throw $e;
+        }
+    }
+    
+    /**
+     * Get Challenge Passage Setting
+     */
+    public function getChallengePassage($zoneId) {
+        try {
+            return $this->request("zones/{$zoneId}/settings/challenge_passage");
+        } catch (Exception $e) {
+            $this->logDebug("Get Challenge Passage Error: " . $e->getMessage());
+            throw $e;
+        }
+    }
+    
+    /**
+     * Get Privacy Pass Setting
+     */
+    public function getPrivacyPass($zoneId) {
+        try {
+            return $this->request("zones/{$zoneId}/settings/privacy_pass");
+        } catch (Exception $e) {
+            $this->logDebug("Get Privacy Pass Error: " . $e->getMessage());
+            throw $e;
+        }
+    }
+    
+    /**
+     * List Workers Scripts
+     */
+    public function listWorkers($zoneId) {
+        try {
+            return $this->request("zones/{$zoneId}/workers/scripts");
+        } catch (Exception $e) {
+            $this->logDebug("List Workers Error: " . $e->getMessage());
+            throw $e;
+        }
+    }
+    
+    /**
+     * Get Worker Routes
+     */
+    public function getWorkerRoutes($zoneId) {
+        try {
+            return $this->request("zones/{$zoneId}/workers/routes");
+        } catch (Exception $e) {
+            $this->logDebug("Get Worker Routes Error: " . $e->getMessage());
+            throw $e;
+        }
+    }
+    
+    /**
+     * List Load Balancers
+     */
+    public function listLoadBalancers($zoneId) {
+        try {
+            return $this->request("zones/{$zoneId}/load_balancers");
+        } catch (Exception $e) {
+            $this->logDebug("List Load Balancers Error: " . $e->getMessage());
+            throw $e;
+        }
+    }
+    
+    /**
+     * Get Stream Info
+     */
+    public function getStreamInfo($zoneId) {
+        try {
+            return $this->request("zones/{$zoneId}/stream");
+        } catch (Exception $e) {
+            $this->logDebug("Get Stream Info Error: " . $e->getMessage());
+            throw $e;
+        }
+    }
+    /**
+     * Debug log
+     */
+    protected function logDebug($message) {
+        if ($this->debug) {
+            error_log('[CloudflareAPI] ' . $message);
+        }
+    }
+}
 }
